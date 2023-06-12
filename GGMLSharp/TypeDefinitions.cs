@@ -164,11 +164,6 @@ public struct ggml_context_container
 
     public ggml_context context;
 }
-public unsafe static class StaticGlobal
-{
-    public static ggml_state* g_state = null;
-    public static volatile int g_state_barrier = 0;
-}
 
 public unsafe struct block_q4_0
 {
