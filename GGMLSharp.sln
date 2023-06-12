@@ -3,9 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.7.33711.374
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Test0", "ConsoleApp24\Test0.csproj", "{18621E7B-8FA7-4AF3-B009-61AFCB87981E}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Test0", "Test0\Test0.csproj", "{18621E7B-8FA7-4AF3-B009-61AFCB87981E}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GGMLSharp", "GGMLSharp\GGMLSharp.csproj", "{E4125078-7724-435B-8062-972E54E659D4}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GGMLSharp", "GGMLSharp\GGMLSharp.csproj", "{E4125078-7724-435B-8062-972E54E659D4}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
