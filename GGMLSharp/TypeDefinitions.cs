@@ -1,5 +1,17 @@
 ﻿namespace GGMLSharp;
 
+[System.Runtime.CompilerServices.InlineArray(64 /*GGML_MAX_CONTEXTS*/)]
+public struct Buffer64<T>
+{
+    private T _element0;
+}
+
+[System.Runtime.CompilerServices.InlineArray(4096 /*GGML_MAX_NODES*/)]
+public struct Buffer4096<T> where T : unmanaged
+{
+    private T _element0;
+}
+
 public unsafe struct ggml_init_params
 {
     // memory pool
@@ -76,6 +88,76 @@ public unsafe struct ggml_tensor
     public void* data;
     public fixed byte padding[8];
 }
+// computation graph
+public unsafe struct ggml_cgraph {
+    const int GGML_MAX_NODES = 4096;
+    public int n_nodes;
+    public int n_leafs;
+    public int n_threads;
+
+    public nuint work_size;
+    public ggml_tensor * work;
+
+    // struct ggml_tensor * nodes[GGML_MAX_NODES];
+    public Buffer4096<IntPtr> nodes;
+    // struct ggml_tensor * grads[GGML_MAX_NODES];
+    public Buffer4096<IntPtr> grads;
+    // struct ggml_tensor * leafs[GGML_MAX_NODES];
+    public Buffer4096<IntPtr> leafs;
+
+    // performance
+    public int     perf_runs;
+    public long perf_cycles;
+    public long perf_time_us;
+
+    public unsafe ggml_tensor* get_node(int index)
+    {
+        fixed (void* ptr = &nodes)
+        {
+            return ((ggml_tensor**)ptr)[index];
+        }
+    }
+
+    public void set_node(int index, ggml_tensor* value)
+    {
+        fixed (void* ptr = &nodes)
+        {
+            ((ggml_tensor**)ptr)[index] = value;
+        }
+    }
+
+    public ggml_tensor* get_leaf(int index)
+    {
+        fixed (void* ptr = &leafs)
+        {
+            return ((ggml_tensor**)ptr)[index];
+        }
+    }
+
+    public void set_leaf(int index, ggml_tensor* value)
+    {
+        fixed (void* ptr = &leafs)
+        {
+            ((ggml_tensor**)ptr)[index] = value;
+        }
+    }
+
+    public unsafe ggml_tensor* get_grad(int index)
+    {
+        fixed (void* ptr = &grads)
+        {
+            return ((ggml_tensor**)ptr)[index];
+        }
+    }
+
+    public void set_grad(int index, ggml_tensor* value)
+    {
+        fixed (void* ptr = &grads)
+        {
+            ((ggml_tensor**)ptr)[index] = value;
+        }
+    }
+};
 public enum ggml_type
 {
     GGML_TYPE_F32 = 0,
@@ -143,12 +225,6 @@ public enum ggml_op
     GGML_OP_MAP_BINARY,
 
     GGML_OP_COUNT,
-}
-
-[System.Runtime.CompilerServices.InlineArray(64 /*GGML_MAX_CONTEXTS*/)]
-public struct Buffer64<T>
-{
-    private T _element0;
 }
 
 public unsafe struct ggml_state
