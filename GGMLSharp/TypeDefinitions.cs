@@ -241,40 +241,40 @@ public struct ggml_context_container
     public ggml_context context;
 }
 
-public unsafe struct block_q4_0
+internal unsafe struct block_q4_0
 {
     const int QK4_0 = 32;
     public float d;          // delta
     public fixed byte qs[QK4_0 / 2];  // nibbles / quants
 };
-public unsafe struct block_q4_1
+internal unsafe struct block_q4_1
 {
     const int QK4_1 = 32;
     public float d;          // delta
     public float m;          // min
     public fixed byte qs[QK4_1 / 2];  // nibbles / quants
 };
-public unsafe struct block_q4_2
+internal unsafe struct block_q4_2
 {
     const int QK4_2 = 16;
     public ushort d;          // delta
     public fixed byte qs[QK4_2 / 2];  // nibbles / quants
 };
-public unsafe struct block_q4_3
+internal unsafe struct block_q4_3
 {
     const int QK4_3 = 16;
     public ushort d;          // delta
     public ushort m;          // min
     public fixed byte qs[QK4_3 / 2];  // nibbles / quants
 };
-public unsafe struct block_q5_0
+internal unsafe struct block_q5_0
 {
     const int QK5_0 = 32;
-    public ushort d;          // delta
+    public Half d;          // delta
     public fixed byte qh[4];  // 5-th bit of quants
     public fixed byte qs[QK5_0 / 2];  // nibbles / quants
 };
-public unsafe struct block_q5_1
+internal unsafe struct block_q5_1
 {
     const int QK5_1 = 32;
     public ushort d;          // delta
@@ -282,17 +282,69 @@ public unsafe struct block_q5_1
     public fixed byte qh[4];  // 5-th bit of quants
     public fixed byte qs[QK5_1 / 2];  // nibbles / quants
 };
-public unsafe struct block_q8_0
+internal unsafe struct block_q8_0
 {
     const int QK8_0 = 32;
     public float d;          // delta
     public fixed byte qs[QK8_0];  // quants
 };
-public unsafe struct block_q8_1
+internal unsafe struct block_q8_1
 {
     const int QK8_1 = 32;
     public float d;          // delta
     public float s0;          // d * sum(qs[i]) low
     public float s1;          // d * sum(qs[i]) high
     public fixed byte qs[QK8_1];  // quants
+};
+
+public enum ggml_task_type
+{
+    GGML_TASK_INIT = 0,
+    GGML_TASK_COMPUTE,
+    GGML_TASK_FINALIZE,
+};
+
+public unsafe struct ggml_compute_params
+{
+    public ggml_task_type type;
+
+    public int ith, nth;
+
+    // work buffer for all threads
+    public nuint wsize;
+    public void* wdata;
+};
+
+public struct ggml_compute_state_shared
+{
+    // ggml_lock_t spin
+    public int spin;
+
+    public int n_threads;
+
+    // synchronization primitives
+    public volatile int n_ready;
+    public volatile int has_work;
+    public volatile int stop; // stop all threads
+};
+
+public unsafe struct ggml_compute_state
+{
+    // ggml_thread_t thrd;
+    public int thrd;
+
+    public ggml_compute_params @params;
+    public ggml_tensor * node;
+
+    public ggml_compute_state_shared * shared;
+};
+
+public unsafe struct quantize_fns_t
+{
+    public delegate* unmanaged<void*, float*,int, void> dequantize_row_q;
+    public delegate* unmanaged<float*, void*, int, void> quantize_row_q;
+    public delegate* unmanaged<float*, void*, int, void> quantize_row_q_reference;
+    public delegate* unmanaged<float*, void*, int, void> quantize_row_q_dot;
+    public delegate* unmanaged<int, float*, void*, void*, void> vec_dot_q;
+    public ggml_type     vec_dot_type;
 };
