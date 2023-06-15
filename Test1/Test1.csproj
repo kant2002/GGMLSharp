@@ -13,4 +13,21 @@
     <ProjectReference Include="..\GGMLSharp\GGMLSharp.csproj" />
   </ItemGroup>
 
+  <Target Name="MakeLargeStackSize" AfterTargets="_CreateAppHost" BeforeTargets="_CopyOutOfDateSourceItemsToOutputDirectory">
+
+    <ItemGroup>
+      <SearchPath Include="$(VS160COMNTOOLS)..\..\VC\Tools\MSVC\**\x64\editbin.exe" Condition=" EXISTS('$(VS160COMNTOOLS)..\..\VC\Tools\MSVC\') " />
+    </ItemGroup>
+
+    <PropertyGroup>
+      <!--<EditBinPath Condition=" '$(EditBinPath)' == '' ">%(SearchPath.FullPath)</EditBinPath>-->
+      <EditBinLocation>C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\editbin.exe</EditBinLocation>
+    </PropertyGroup>
+
+    <!--<Error Text="The editbin.exe could not be found.  Please make sure you have the c++ tools installed for Visual Studio!" Condition=" '$(EditBinPath)' == '' " />-->
+    <Message Text="Found editbin.exe at $(EditBinPath)" />
+    <Exec Command="&quot;$(EditBinLocation)&quot; /STACK:4000000 &quot;$(AppHostIntermediatePath)&quot;" />
+  </Target>
+
+
 </Project>
