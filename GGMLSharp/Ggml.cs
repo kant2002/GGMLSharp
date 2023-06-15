@@ -1,11 +1,8 @@
-﻿using GGMLSharp;
-using System;
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace GGMLSharp;
 
@@ -30,6 +27,7 @@ public static unsafe class Ggml
     const int GGML_VEC_DOT_UNROLL = 2;
 
     const int CACHE_LINE_SIZE = 64;
+    const int CACHE_LINE_SIZE_F32 = CACHE_LINE_SIZE / sizeof(float);
     const int CLOCKS_PER_SEC = 1000;
 
     const int QK4_0 = 32;
@@ -43,13 +41,13 @@ public static unsafe class Ggml
     private static ulong GGML_OBJECT_SIZE = (ulong)sizeof(ggml_object);
 
     // precomputed gelu table for f16 (128 KB)
-    private static ushort[] table_gelu_f16 = new ushort[1 << 16];
+    private static Half[] table_gelu_f16 = new Half[1 << 16];
 
     // precomputed silu table for f16 (128 KB)
-    private static ushort[] table_silu_f16 = new ushort[1 << 16];
+    private static Half[] table_silu_f16 = new Half[1 << 16];
 
     // precomputed exp table for f16 (128 KB)
-    private static ushort[] table_exp_f16 = new ushort[1 << 16];
+    private static Half[] table_exp_f16 = new Half[1 << 16];
 
     // precomputed f32 table for f16 (256 KB)
     private static float[] table_f32_f16 = new float[1 << 16];
@@ -278,14 +276,14 @@ public static unsafe class Ggml
         Debug.Assert(k % QK4_0 == 0);
         int nb = k / QK4_0;
 
-        byte* pp = stackalloc byte[QK4_0/2];
+        byte* pp = stackalloc byte[QK4_0 / 2];
 
         for (int i = 0; i < nb; i++) {
             float amax = 0.0f; // absolute max
             float max = 0.0f;
 
             for (int l = 0; l < QK4_0; l++) {
-                float v = x[i*QK4_0 + l];
+                float v = x[i * QK4_0 + l];
                 if (amax < Math.Abs(v)) {
                     amax = Math.Abs(v);
                     max = v;
@@ -293,13 +291,13 @@ public static unsafe class Ggml
             }
 
             float d = max / -8;
-            float id = d != 0.0f ? 1.0f/d : 0.0f;
+            float id = d != 0.0f ? 1.0f / d : 0.0f;
 
             y[i].d = d;
 
             for (int l = 0; l < QK4_0; l += 2) {
-                float v0 = x[i*QK4_0 + l + 0]*id;
-                float v1 = x[i*QK4_0 + l + 1]*id;
+                float v0 = x[i * QK4_0 + l + 0] * id;
+                float v1 = x[i * QK4_0 + l + 1] * id;
 
                 byte vi0 = (byte)Math.Min(15, Math.Round(v0) + 8);
                 byte vi1 = (byte)Math.Min(15, Math.Round(v1) + 8);
@@ -307,7 +305,7 @@ public static unsafe class Ggml
                 Debug.Assert(vi0 < 16);
                 Debug.Assert(vi1 < 16);
 
-                pp[l/2] = (byte)(vi0 | (vi1 << 4));
+                pp[l / 2] = (byte)(vi0 | (vi1 << 4));
             }
 
             Buffer.MemoryCopy(pp, y[i].qs, QK4_0 / 2, QK4_0 / 2);
@@ -744,7 +742,7 @@ public static unsafe class Ggml
 
             for (int l = 0; l < QK8_1; l += 2)
             {
-                float v0 = x[i * QK8_1             + l] * id;
+                float v0 = x[i * QK8_1 + l] * id;
                 float v1 = x[i * QK8_1 + QK8_1 / 2 + l] * id;
 
                 y[i].qs[l] = (byte)Math.Round(v0);
@@ -959,14 +957,14 @@ public static unsafe class Ggml
 
         block_q5_0* x = (block_q5_0*)vx;
 
-        for (int i = 0; i<nb; i++) {
+        for (int i = 0; i < nb; i++) {
             float d = (float)(Half)(x[i].d);
 
             byte* pp = x[i].qs;
 
             uint qh = *(uint*)x[i].qh;
 
-            for (int l = 0; l<QK5_0; l += 2) {
+            for (int l = 0; l < QK5_0; l += 2) {
                 byte vi = pp[l / 2];
 
                 // extract the 5-th bit from qh
@@ -996,7 +994,7 @@ public static unsafe class Ggml
 
         block_q5_1* x = (block_q5_1*)vx;
 
-        for (int i = 0; i<nb; i++)
+        for (int i = 0; i < nb; i++)
         {
             float d = (float)(Half)(x[i].d);
             float m = (float)(Half)(x[i].m);
@@ -1005,7 +1003,7 @@ public static unsafe class Ggml
 
             uint qh = *(uint*)x[i].qh;
 
-            for (int l = 0; l<QK5_1; l += 2)
+            for (int l = 0; l < QK5_1; l += 2)
             {
                 byte vi = pp[l / 2];
 
@@ -1290,11 +1288,11 @@ public static unsafe class Ggml
             int sumi = 0;
 
             for (int j = 0; j < QK8_0; j++)
-            { 
+            {
                 int v0 = x0[j];
                 int v1 = y0[j];
 
-                sumi += v0*v1;
+                sumi += v0 * v1;
             }
 
             sumf += (x[i].d * y[i].d) * sumi;
@@ -1323,11 +1321,9 @@ public static unsafe class Ggml
                     //memcpy(&ii, &ui, sizeof(ushort));
                     ii = ui; // Probably different configurations define differently, that's why C code use memcpy.
                     float f = table_f32_f16[i] = GGML_COMPUTE_FP16_TO_FP32(ii);
-#if INIT_TABLES
-                table_gelu_f16[i] = GGML_FP32_TO_FP16(ggml_gelu_f32(f));
-                table_silu_f16[i] = GGML_FP32_TO_FP16(ggml_silu_f32(f));
-                table_exp_f16[i] = GGML_FP32_TO_FP16(expf(f));
-#endif
+                    table_gelu_f16[i] = (Half)(ggml_gelu_f32(f));
+                    table_silu_f16[i] = (Half)(ggml_silu_f32(f));
+                    table_exp_f16[i] = (Half)(MathF.Exp(f));
                 }
 
                 long t_end = ggml_time_us();
@@ -1702,8 +1698,114 @@ public static unsafe class Ggml
     public static void ggml_vec_set_i32(int n, int* x, int v) { for (int i = 0; i < n; ++i) x[i] = v; }
 
     public static void ggml_vec_set_f16(int n, Half* x, int v) { for (int i = 0; i < n; ++i) x[i] = (Half)v; }
-    public static void ggml_vec_set_f32(int n, float* x, float v) { for (int i = 0; i < n; ++i) x[i] = v; }
+    
+    static void ggml_vec_add_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+    static void ggml_vec_acc_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] += x[i]; }
+    static void ggml_vec_acc1_f32(int n, float* y, float v) { for (int i = 0; i < n; ++i) y[i] += v; }
+    static void ggml_vec_sub_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+    static void ggml_vec_set_f32(int n, float* y, float v) { for (int i = 0; i < n; ++i) y[i] = v; }
+    static void ggml_vec_cpy_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = x[i]; }
+    static void ggml_vec_neg_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = -x[i]; }
+    static void ggml_vec_mul_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] * y[i]; }
+    static void ggml_vec_div_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] / y[i]; }
 
+    static void ggml_vec_dot_f32(int n, float* s, float* x, float* y)
+    {
+        double sumf = 0.0;
+        for (int i = 0; i < n; ++i) {
+            sumf += (x[i]*y[i]);
+        }
+        
+        *s = (float)sumf;
+    }
+    static void ggml_vec_dot_f16(int n, float* s, Half* x, Half* y)
+    {
+        double sumf = 0.0;
+        for (int i = 0; i < n; ++i) {
+            sumf += (float)x[i]*(float)y[i];
+        }
+        
+        *s = (float)sumf;
+    }
+    static void ggml_vec_norm_f32(int n, float* s, float*x) { ggml_vec_dot_f32(n, s, x, x); *s = MathF.Sqrt(*s); }
+    static void ggml_vec_sqr_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = x[i]*x[i]; }
+    static void ggml_vec_sqrt_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = MathF.Sqrt(x[i]); }
+    static void ggml_vec_abs_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = Math.Abs(x[i]); }
+    static void ggml_vec_sgn_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.0f) ? 1.0f : ((x[i] < 0.0f) ? -1.0f : 0.0f); }
+    static void ggml_vec_step_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.0f) ? 1.0f : 0.0f; }
+    static void ggml_vec_relu_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = (x[i] > 0.0f) ? x[i] : 0.0f; }
+    const float GELU_COEF_A    = 0.044715f;
+    const float SQRT_2_OVER_PI = 0.79788456080286535587989211986876f;
+    static float ggml_gelu_f32(float x) {
+        return 0.5f*x*(1.0f + MathF.Tanh(SQRT_2_OVER_PI*x*(1.0f + GELU_COEF_A*x*x)));
+    }
+    static void ggml_vec_gelu_f16(int n, Half* x, Half* y) {
+        short * i16 = (short *) x;
+        for (int i = 0; i < n; ++i) {
+            y[i] = table_gelu_f16[i16[i]];
+        }
+    }
+#if GGML_GELU_FP16
+    static void ggml_vec_gelu_f32(int n, float* x, float* y) {
+        ushort t;
+        for (int i = 0; i < n; ++i) {
+            Half fp16 = (Half)(x[i]);
+            NativeMemory.Copy(&fp16, &t, sizeof(ushort));
+            y[i] = (float)(table_gelu_f16[t]);
+        }
+    }
+#else
+    static void ggml_vec_gelu_f32(int n, float* x, float* y) {
+        for (int i = 0; i < n; ++i) {
+            y[i] = ggml_gelu_f32(x[i]);
+        }
+    }
+#endif
+    static float ggml_silu_f32(float x) {
+        return x/(1.0f + MathF.Exp(-x));
+    }
+    static void ggml_vec_silu_f16(int n, Half* x, Half* y) {
+        short * i16 = (short *) x;
+        for (int i = 0; i < n; ++i) {
+            y[i] = table_silu_f16[i16[i]];
+        }
+    }
+#if GGML_SILU_FP16
+    static void ggml_vec_silu_f32(int n, float* x, float* y) {
+        ushort t;
+        for (int i = 0; i < n; ++i) {
+            Half fp16 = (Half)(x[i]);
+            NativeMemory.Copy(&fp16, &t, sizeof(ushort));
+            y[i] = (float)(table_silu_f16[t]);
+        }
+    }
+#else
+    static void ggml_vec_silu_f32(int n, float* x, float* y) {
+        for (int i = 0; i < n; ++i) {
+            y[i] = ggml_silu_f32(x[i]);
+        }
+    }
+#endif
+    
+    static void ggml_vec_sum_f32(int n, float * s, float * x) {
+#if !GGML_USE_ACCELERATE
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i) {
+            sum += (double)x[i];
+        }
+        *s = (float)sum;
+#else
+        vDSP_sve(x, 1, s, n);
+#endif
+    }
+    
+    static void ggml_vec_sum_ggf(int n, double * s, float * x) {
+        double sum = 0.0;
+        for (int i = 0; i < n; ++i) {
+            sum += (double)x[i];
+        }
+        *s = sum;
+    }
 
     public static float ggml_get_f32_1d(ggml_tensor* tensor, int i)
     {
@@ -1957,26 +2059,26 @@ public static unsafe class Ggml
         int n_threads = cgraph->n_threads;
 
         ggml_compute_state_shared state_shared = new ggml_compute_state_shared {
-            spin      = GGML_LOCK_INITIALIZER,
+            spin = GGML_LOCK_INITIALIZER,
             n_threads = n_threads,
-            n_ready   = 0,
-            has_work  = 0,
-            stop      = 0,
+            n_ready = 0,
+            has_work = 0,
+            stop = 0,
         };
         //ggml_compute_state* workers = n_threads > 1 ? stackalloc ggml_compute_state[(n_threads - 1)] : null;
-        ggml_compute_state* workers = n_threads > 1 ? (ggml_compute_state*)NativeMemory.Alloc((nuint)sizeof(ggml_compute_state) * (nuint)(n_threads - 1)) : null;
+        ggml_compute_state[] workers = n_threads > 1 ? new ggml_compute_state[n_threads - 1] : null!;
 
         // create thread pool
         if (n_threads > 1)
         {
             ggml_lock_init(&state_shared.spin);
 
-            Interlocked.Exchange(ref state_shared.has_work, 1);
+            atomic_store(ref state_shared.has_work, 1);
 
             for (int j = 0; j < n_threads - 1; j++)
             {
                 workers[j] = new ggml_compute_state {
-                    thrd = 0,
+                    thrd = null!,
                     @params = new ggml_compute_params
                     {
                         type = ggml_task_type.GGML_TASK_COMPUTE,
@@ -1989,8 +2091,10 @@ public static unsafe class Ggml
                     shared = &state_shared,
                 };
 
-                int rc = ggml_thread_create(&workers[j].thrd, null, &ggml_graph_compute_thread, &workers[j]);
-                Debug.Assert(rc == 0);
+                workers[j].thrd = new Thread(ggml_graph_compute_thread);
+                workers[j].thrd.Start(workers[j]);
+                //int rc = ggml_thread_create(&workers[j].thrd, null, &ggml_graph_compute_thread, &workers[j]);
+                //Debug.Assert(rc == 0);
             }
         }
 
@@ -2285,9 +2389,9 @@ public static unsafe class Ggml
             // INIT
             ggml_compute_params @params = new ggml_compute_params
             {
-                type  = ggml_task_type.GGML_TASK_INIT,
-                ith   = 0,
-                nth   = node->n_tasks,
+                type = ggml_task_type.GGML_TASK_INIT,
+                ith = 0,
+                nth = node->n_tasks,
                 wsize = cgraph->work is not null ? ggml_nbytes(cgraph->work) : 0,
                 wdata = cgraph->work is not null ? cgraph->work->data : null,
             };
@@ -2299,7 +2403,7 @@ public static unsafe class Ggml
             {
                 if (atomic_fetch_add(ref state_shared.n_ready, 1) == n_threads - 1)
                 {
-                    Interlocked.Exchange(ref state_shared.has_work, 0);
+                    atomic_store(ref state_shared.has_work, 0);
                 }
 
                 while (atomic_load(ref state_shared.has_work) != 0)
@@ -2442,8 +2546,7 @@ public static unsafe class Ggml
 
             for (int j = 0; j < n_threads - 1; j++)
             {
-                int rc = ggml_thread_join(workers[j].thrd, null);
-                Debug.Assert(rc == 0);
+                workers[j].thrd.Join();
             }
 
             ggml_lock_destroy(&state_shared.spin);
@@ -2522,6 +2625,1379 @@ public static unsafe class Ggml
 
         Debug.Assert(tensor->grad == null);
         tensor->grad = ggml_dup_tensor(ctx, tensor);
+    }
+
+    private static void ggml_compute_forward_dup_f16(
+        ggml_compute_params * @params,
+        ggml_tensor * src0,
+        ggml_tensor * dst)
+    {
+        Debug.Assert(ggml_nelements(dst) == ggml_nelements(src0));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+    long ne00 = src0->ne[0];
+    long ne01 = src0->ne[1];
+    long ne02 = src0->ne[2];
+    long ne03 = src0->ne[3];
+
+    long ne0 = dst->ne[0];
+    long ne1 = dst->ne[1];
+    long ne2 = dst->ne[2];
+    long ne3 = dst->ne[3];
+
+    ulong nb00 = src0->nb[0];
+    ulong nb01 = src0->nb[1];
+    ulong nb02 = src0->nb[2];
+    ulong nb03 = src0->nb[3];
+
+    ulong nb0 = dst->nb[0];
+    ulong nb1 = dst->nb[1];
+    ulong nb2 = dst->nb[2];
+    ulong nb3 = dst->nb[3];
+
+    int ith = @params->ith; // thread index
+    int nth = @params->nth; // number of threads
+    int dr;
+    if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst) && src0->type == dst->type) {
+        // parallelize by elements
+        long ne = ggml_nelements(dst);
+        dr = (int)((ne + nth - 1) / nth);
+        int ie0 = dr * ith;
+        int ie1 = Math.Min(ie0 + dr, (int)ne);
+
+        NativeMemory.Copy(
+            ((byte *)  dst->data + ie0*(int)nb0),
+            ((byte *) src0->data + ie0* (int)nb00),
+            (nuint)(ie1 - ie0) * (nuint)GGML_TYPE_SIZE[(int)src0->type]);
+
+        return;
+    }
+
+    // parallelize by rows
+    int nr = (int)ne01;
+    // number of rows per thread
+    dr = (nr + nth - 1) / nth;
+    // row range for this thread
+    int ir0 = dr * ith;
+    int ir1 = Math.Min(ir0 + dr, (int)nr);
+
+    if (src0->type == dst->type &&
+        ne00 == ne0 &&
+        nb00 == GGML_TYPE_SIZE[(int)src0->type] && nb0 == GGML_TYPE_SIZE[(int)dst->type]) {
+        // copy by rows
+        nuint rs = (nuint)ne00 *(nuint)nb00;
+        for (long i03 = 0; i03 < ne03; i03++) {
+            for (long i02 = 0; i02 < ne02; i02++) {
+                for (long i01 = ir0; i01 < ir1; i01++) {
+                    NativeMemory.Copy(
+                        ((byte *)  dst->data + (nuint)i01 * (nuint)nb1  + (nuint)i02 * (nuint)nb2  + (nuint)i03 * (nuint)nb3),
+                        ((byte *) src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03),
+                        rs);
+                }
+            }
+        }
+        return;
+    }
+
+    // TODO: add more special-case implementations for tensor shapes/strides that can benefit from memcpy
+
+    if (ggml_is_contiguous(dst)) {
+        if (nb00 == (ulong)sizeof(Half)) {
+            if (dst->type == ggml_type.GGML_TYPE_F16) {
+                nuint id = 0;
+                    nuint rs = (nuint)ne00 * (nuint)nb00;
+                byte * dst_ptr = (byte*) dst->data;
+
+                for (int i03 = 0; i03 < ne03; i03++) {
+                    for (int i02 = 0; i02 < ne02; i02++) {
+                        id += (nuint)rs * (nuint)ir0;
+                        for (int i01 = ir0; i01 < ir1; i01++) {
+                                byte* src0_ptr = (byte*) src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03;
+                                NativeMemory.Copy(dst_ptr + id, src0_ptr, rs);
+                            id += rs;
+                        }
+                        id += rs * (nuint)(ne01 - ir1);
+                    }
+                }
+            } else if (dst->type == ggml_type.GGML_TYPE_F32) {
+                    nuint id = 0;
+                float * dst_ptr = (float *) dst->data;
+
+                for (int i03 = 0; i03 < ne03; i03++) {
+                    for (int i02 = 0; i02 < ne02; i02++) {
+                        id += (nuint)ne00 * (nuint)ir0;
+                        for (int i01 = ir0; i01 < ir1; i01++) {
+                            Half * src0_ptr = (Half *) ((byte *) src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+                            for (int i00 = 0; i00 < ne00; i00++) {
+                                dst_ptr[id] = (float)src0_ptr[i00];
+                                id++;
+                            }
+                        }
+                        id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                    }
+                }
+            } else if (ggml_is_quantized(dst->type)) {
+                var quantize_row_q = quantize_fns[(int)dst->type].quantize_row_q;
+                float * src0_f32 = (float *) @params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
+
+                nuint id = 0;
+                nuint rs = (nuint)nb0 * (nuint)(ne00 / GGML_BLCK_SIZE[(int)dst->type]);
+                char * dst_ptr = (char *) dst->data;
+
+                for (int i03 = 0; i03 < ne03; i03++) {
+                    for (int i02 = 0; i02 < ne02; i02++) {
+                        id += rs * (nuint)ir0;
+                        for (int i01 = ir0; i01 < ir1; i01++) {
+                            Half* src0_ptr = (Half*) ((byte *) src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                            for (int i00 = 0; i00 < ne00; i00++) {
+                                src0_f32[i00] = (float)src0_ptr[i00];
+                            }
+
+                            quantize_row_q(src0_f32, dst_ptr + id, (int)ne00);
+                            id += rs;
+                        }
+                        id += rs * (nuint)(ne01 - ir1);
+                    }
+                }
+            } else {
+                Debug.Assert(false); // TODO: implement
+            }
+        } else {
+            //printf("%s: this is not optimal - fix me\n", __func__);
+
+            if (dst->type == ggml_type.GGML_TYPE_F32) {
+                nuint id = 0;
+                float * dst_ptr = (float *) dst->data;
+
+                for (int i03 = 0; i03 < ne03; i03++) {
+                    for (int i02 = 0; i02 < ne02; i02++) {
+                        id += (nuint)ne00 * (nuint)ir0;
+                        for (int i01 = ir0; i01 < ir1; i01++) {
+                            for (int i00 = 0; i00 < ne00; i00++) {
+                                Half* src0_ptr = (Half*) ((char *) src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                                dst_ptr[id] = (float)(*src0_ptr);
+                                id++;
+                            }
+                        }
+                        id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                    }
+                }
+            } else if (dst->type == ggml_type.GGML_TYPE_F16) {
+                nuint id = 0;
+                Half * dst_ptr = (Half *) dst->data;
+
+                for (int i03 = 0; i03 < ne03; i03++) {
+                    for (int i02 = 0; i02 < ne02; i02++) {
+                        id += (nuint)ne00 * (nuint)ir0;
+                        for (int i01 = ir0; i01 < ir1; i01++) {
+                            for (int i00 = 0; i00 < ne00; i00++) {
+                                Half * src0_ptr = (Half *) ((byte *) src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                                dst_ptr[id] = *src0_ptr;
+                                id++;
+                            }
+                        }
+                        id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                    }
+                }
+            } else {
+                Debug.Assert(false); // TODO: implement
+            }
+        }
+        return;
+    }
+
+    // dst counters
+    long i10 = 0;
+    long i11 = 0;
+    long i12 = 0;
+    long i13 = 0;
+
+    if (dst->type == ggml_type.GGML_TYPE_F16) {
+        for (long i03 = 0; i03 < ne03; i03++) {
+            for (long i02 = 0; i02 < ne02; i02++) {
+                i10 += ne00 * ir0;
+                while (i10 >= ne0) {
+                    i10 -= ne0;
+                    if (++i11 == ne1) {
+                        i11 = 0;
+                        if (++i12 == ne2) {
+                            i12 = 0;
+                            if (++i13 == ne3) {
+                                i13 = 0;
+                            }
+                        }
+                    }
+                }
+                for (long i01 = ir0; i01 < ir1; i01++) {
+                    for (long i00 = 0; i00 < ne00; i00++) {
+                        byte * src0_ptr = ((byte *) src0->data + (nuint)i00*(nuint)nb00 + (nuint)i01*(nuint)nb01 + (nuint)i02*(nuint)nb02 + (nuint)i03*(nuint)nb03);
+                        byte * dst_ptr  = ((byte *)  dst->data + (nuint)i10 * (nuint)nb0  + (nuint)i11 * (nuint)nb1  + (nuint)i12 * (nuint)nb2  + (nuint)i13 * (nuint)nb3);
+
+                        NativeMemory.Copy(dst_ptr, src0_ptr, (nuint)sizeof(Half));
+
+                        if (++i10 == ne00) {
+                            i10 = 0;
+                            if (++i11 == ne01) {
+                                i11 = 0;
+                                if (++i12 == ne02) {
+                                    i12 = 0;
+                                    if (++i13 == ne03) {
+                                        i13 = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                i10 += ne00 * (ne01 - ir1);
+                while (i10 >= ne0) {
+                    i10 -= ne0;
+                    if (++i11 == ne1) {
+                        i11 = 0;
+                        if (++i12 == ne2) {
+                            i12 = 0;
+                            if (++i13 == ne3) {
+                                i13 = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if (dst->type == ggml_type.GGML_TYPE_F32) {
+        for (long i03 = 0; i03 < ne03; i03++) {
+            for (long i02 = 0; i02 < ne02; i02++) {
+                i10 += ne00 * ir0;
+                while (i10 >= ne0) {
+                    i10 -= ne0;
+                    if (++i11 == ne1) {
+                        i11 = 0;
+                        if (++i12 == ne2) {
+                            i12 = 0;
+                            if (++i13 == ne3) {
+                                i13 = 0;
+                            }
+                        }
+                    }
+                }
+                for (long i01 = ir0; i01 < ir1; i01++) {
+                    for (long i00 = 0; i00 < ne00; i00++) {
+                        byte* src0_ptr = ((byte *) src0->data + (nuint)i00*(nuint)nb00 + (nuint)i01*(nuint)nb01 + (nuint)i02*(nuint)nb02 + (nuint)i03*(nuint)nb03);
+                        byte* dst_ptr  = ((byte *)  dst->data + (nuint)i10 * (nuint)nb0  + (nuint)i11 * (nuint)nb1  + (nuint)i12 * (nuint)nb2  + (nuint)i13 * (nuint)nb3);
+
+                        *(float *) dst_ptr = (float)(*(Half *) src0_ptr);
+
+                        if (++i10 == ne0) {
+                            i10 = 0;
+                            if (++i11 == ne1) {
+                                i11 = 0;
+                                if (++i12 == ne2) {
+                                    i12 = 0;
+                                    if (++i13 == ne3) {
+                                        i13 = 0;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                i10 += ne00 * (ne01 - ir1);
+                while (i10 >= ne0) {
+                    i10 -= ne0;
+                    if (++i11 == ne1) {
+                        i11 = 0;
+                        if (++i12 == ne2) {
+                            i12 = 0;
+                            if (++i13 == ne3) {
+                                i13 = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        Debug.Assert(false); // TODO: implement
+    }
+    }
+
+    private static void ggml_compute_forward_dup_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(ggml_nelements(dst) == ggml_nelements(src0));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        long ne00 = src0->ne[0];
+        long ne01 = src0->ne[1];
+        long ne02 = src0->ne[2];
+        long ne03 = src0->ne[3];
+
+        long ne0 = dst->ne[0];
+        long ne1 = dst->ne[1];
+        long ne2 = dst->ne[2];
+        long ne3 = dst->ne[3];
+
+        ulong nb00 = src0->nb[0];
+        ulong nb01 = src0->nb[1];
+        ulong nb02 = src0->nb[2];
+        ulong nb03 = src0->nb[3];
+
+        ulong nb0 = dst->nb[0];
+        ulong nb1 = dst->nb[1];
+        ulong nb2 = dst->nb[2];
+        ulong nb3 = dst->nb[3];
+
+        int ith = @params->ith; // thread index
+        int nth = @params->nth; // number of threads
+        int dr;
+
+        if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst) && src0->type == dst->type)
+        {
+            // parallelize by elements
+            int ne = (int)ggml_nelements(dst);
+            dr = (ne + nth - 1) / nth;
+            int ie0 = dr * ith;
+            int ie1 = Math.Min(ie0 + dr, ne);
+
+            NativeMemory.Copy(
+                ((byte*)dst->data + (nuint)ie0 * (nuint)nb0),
+                ((byte*)src0->data + (nuint)ie0 * (nuint)nb00),
+                (nuint)(ie1 - ie0) * (nuint)GGML_TYPE_SIZE[(int)src0->type]);
+
+            return;
+        }
+
+        // parallelize by rows
+        int nr = (int)ne01;
+        // number of rows per thread
+        dr = ((nr + nth - 1) / nth);
+        // row range for this thread
+        int ir0 = dr * ith;
+        int ir1 = Math.Min(ir0 + dr, nr);
+
+        if (src0->type == dst->type &&
+            ne00 == ne0 &&
+            nb00 == GGML_TYPE_SIZE[(int)src0->type] && nb0 == GGML_TYPE_SIZE[(int)dst->type])
+        {
+            // copy by rows
+            nuint rs = (nuint)ne00 * (nuint)nb00;
+            for (long i03 = 0; i03 < ne03; i03++)
+            {
+                for (long i02 = 0; i02 < ne02; i02++)
+                {
+                    for (long i01 = ir0; i01 < ir1; i01++)
+                    {
+                        NativeMemory.Copy(
+                            ((byte*)dst->data + (nuint)i01 * (nuint)nb1 + (nuint)i02 * (nuint)nb2 + (nuint)i03 * (nuint)nb3),
+                            ((byte*)src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03),
+                            rs);
+                    }
+                }
+            }
+            return;
+        }
+
+        if (ggml_is_contiguous(dst))
+        {
+            // TODO: simplify
+            if (nb00 == sizeof(float))
+            {
+                if (dst->type == ggml_type.GGML_TYPE_F32)
+                {
+                    nuint id = 0;
+                    nuint rs = (nuint)ne00 * (nuint)nb00;
+                    byte* dst_ptr = (byte*)dst->data;
+
+                    for (int i03 = 0; i03 < ne03; i03++)
+                    {
+                        for (int i02 = 0; i02 < ne02; i02++)
+                        {
+                            id += rs * (nuint)ir0;
+                            for (int i01 = ir0; i01 < ir1; i01++)
+                            {
+                                byte* src0_ptr = (byte*)src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03;
+                                NativeMemory.Copy(dst_ptr + id, src0_ptr, rs);
+                                id += rs;
+                            }
+                            id += rs * (nuint)(ne01 - ir1);
+                        }
+                    }
+                }
+                else if (dst->type == ggml_type.GGML_TYPE_F16)
+                {
+                    nuint id = 0;
+                    Half* dst_ptr = (Half*)dst->data;
+
+                    for (int i03 = 0; i03 < ne03; i03++)
+                    {
+                        for (int i02 = 0; i02 < ne02; i02++)
+                        {
+                            id += (nuint)ne00 * (nuint)ir0;
+                            for (int i01 = ir0; i01 < ir1; i01++)
+                            {
+                                for (int i00 = 0; i00 < ne00; i00++)
+                                {
+                                    float* src0_ptr = (float*)((byte*)src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                                    dst_ptr[id] = (Half)(*src0_ptr);
+                                    id++;
+                                }
+                            }
+                            id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                        }
+                    }
+                }
+                else if (ggml_is_quantized(dst->type))
+                {
+                    var quantize_row_q = quantize_fns[(int)dst->type].quantize_row_q;
+
+                    nuint id = 0;
+                    nuint rs = (nuint)nb0 * (nuint)(ne00 / GGML_BLCK_SIZE[(int)dst->type]);
+                    byte* dst_ptr = (byte*)dst->data;
+
+                    for (int i03 = 0; i03 < ne03; i03++)
+                    {
+                        for (int i02 = 0; i02 < ne02; i02++)
+                        {
+                            id += rs * (nuint)ir0;
+                            for (int i01 = ir0; i01 < ir1; i01++)
+                            {
+                                float* src0_ptr = (float*)((byte*)src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+                                quantize_row_q(src0_ptr, dst_ptr + id, (int)ne00);
+                                id += rs;
+                            }
+                            id += rs * (nuint)(ne01 - ir1);
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.Assert(false); // TODO: implement
+                }
+            }
+            else
+            {
+                //printf("%s: this is not optimal - fix me\n", __func__);
+
+                if (dst->type == ggml_type.GGML_TYPE_F32)
+                {
+                    nuint id = 0;
+                    float* dst_ptr = (float*)dst->data;
+
+                    for (int i03 = 0; i03 < ne03; i03++)
+                    {
+                        for (int i02 = 0; i02 < ne02; i02++)
+                        {
+                            id += (nuint)ne00 * (nuint)ir0;
+                            for (int i01 = ir0; i01 < ir1; i01++)
+                            {
+                                for (int i00 = 0; i00 < ne00; i00++)
+                                {
+                                    float* src0_ptr = (float*)((byte*)src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                                    dst_ptr[id] = *src0_ptr;
+                                    id++;
+                                }
+                            }
+                            id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                        }
+                    }
+                }
+                else if (dst->type == ggml_type.GGML_TYPE_F16)
+                {
+                    nuint id = 0;
+                    Half* dst_ptr = (Half*)dst->data;
+
+                    for (int i03 = 0; i03 < ne03; i03++)
+                    {
+                        for (int i02 = 0; i02 < ne02; i02++)
+                        {
+                            id += (nuint)ne00 * (nuint)ir0;
+                            for (int i01 = ir0; i01 < ir1; i01++)
+                            {
+                                for (int i00 = 0; i00 < ne00; i00++)
+                                {
+                                    float* src0_ptr = (float*)((byte*)src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+
+                                    dst_ptr[id] = (Half)(*src0_ptr);
+                                    id++;
+                                }
+                            }
+                            id += (nuint)ne00 * (nuint)(ne01 - ir1);
+                        }
+                    }
+                }
+                else
+                {
+                    Debug.Assert(false); // TODO: implement
+                }
+            }
+
+            return;
+        }
+
+        // dst counters
+
+        long i10 = 0;
+        long i11 = 0;
+        long i12 = 0;
+        long i13 = 0;
+
+        if (dst->type == ggml_type.GGML_TYPE_F32)
+        {
+            for (long i03 = 0; i03 < ne03; i03++)
+            {
+                for (long i02 = 0; i02 < ne02; i02++)
+                {
+                    i10 += ne00 * ir0;
+                    while (i10 >= ne0)
+                    {
+                        i10 -= ne0;
+                        if (++i11 == ne1)
+                        {
+                            i11 = 0;
+                            if (++i12 == ne2)
+                            {
+                                i12 = 0;
+                                if (++i13 == ne3)
+                                {
+                                    i13 = 0;
+                                }
+                            }
+                        }
+                    }
+                    for (long i01 = ir0; i01 < ir1; i01++)
+                    {
+                        for (long i00 = 0; i00 < ne00; i00++)
+                        {
+                            byte* src0_ptr = ((byte*)src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+                            byte* dst_ptr = ((byte*)dst->data + (nuint)i10 * (nuint)nb0 + (nuint)i11 * (nuint)nb1 + (nuint)i12 * (nuint)nb2 + (nuint)i13 * (nuint)nb3);
+
+                            NativeMemory.Copy(dst_ptr, src0_ptr, sizeof(float));
+
+                            if (++i10 == ne0)
+                            {
+                                i10 = 0;
+                                if (++i11 == ne1)
+                                {
+                                    i11 = 0;
+                                    if (++i12 == ne2)
+                                    {
+                                        i12 = 0;
+                                        if (++i13 == ne3)
+                                        {
+                                            i13 = 0;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i10 += ne00 * (ne01 - ir1);
+                    while (i10 >= ne0)
+                    {
+                        i10 -= ne0;
+                        if (++i11 == ne1)
+                        {
+                            i11 = 0;
+                            if (++i12 == ne2)
+                            {
+                                i12 = 0;
+                                if (++i13 == ne3)
+                                {
+                                    i13 = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else if (dst->type == ggml_type.GGML_TYPE_F16)
+        {
+            for (long i03 = 0; i03 < ne03; i03++)
+            {
+                for (long i02 = 0; i02 < ne02; i02++)
+                {
+                    i10 += ne00 * ir0;
+                    while (i10 >= ne0)
+                    {
+                        i10 -= ne0;
+                        if (++i11 == ne1)
+                        {
+                            i11 = 0;
+                            if (++i12 == ne2)
+                            {
+                                i12 = 0;
+                                if (++i13 == ne3)
+                                {
+                                    i13 = 0;
+                                }
+                            }
+                        }
+                    }
+                    for (long i01 = ir0; i01 < ir1; i01++)
+                    {
+                        for (long i00 = 0; i00 < ne00; i00++)
+                        {
+                            byte* src0_ptr = ((byte*)src0->data + (nuint)i00 * (nuint)nb00 + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03);
+                            byte* dst_ptr = ((byte*)dst->data + (nuint)i10 * (nuint)nb0 + (nuint)i11 * (nuint)nb1 + (nuint)i12 * (nuint)nb2 + (nuint)i13 * (nuint)nb3);
+
+                            *(Half*)dst_ptr = (Half)(*(float*)src0_ptr);
+
+                            if (++i10 == ne0)
+                            {
+                                i10 = 0;
+                                if (++i11 == ne1)
+                                {
+                                    i11 = 0;
+                                    if (++i12 == ne2)
+                                    {
+                                        i12 = 0;
+                                        if (++i13 == ne3)
+                                        {
+                                            i13 = 0;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    i10 += ne00 * (ne01 - ir1);
+                    while (i10 >= ne0)
+                    {
+                        i10 -= ne0;
+                        if (++i11 == ne1)
+                        {
+                            i11 = 0;
+                            if (++i12 == ne2)
+                            {
+                                i12 = 0;
+                                if (++i13 == ne3)
+                                {
+                                    i13 = 0;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            Debug.Assert(false); // TODO: implement
+        }
+    }
+
+    static void ggml_compute_forward_dup(
+            ggml_compute_params* @params,
+            ggml_tensor* src0,
+            ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F16:
+                {
+                    ggml_compute_forward_dup_f16(@params, src0, dst);
+                }
+                break;
+            case ggml_type.GGML_TYPE_F32:
+                {
+                    ggml_compute_forward_dup_f32(@params, src0, dst);
+                }
+                break;
+            default:
+                {
+                    Debug.Assert(false);
+                }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_add_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        int ith = @params->ith; // thread index
+        int nth = @params->nth; // number of threads
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        nuint nb00 = (nuint)src0->nb[0];
+        nuint nb01 = (nuint)src0->nb[1];
+
+        nuint nb10 = (nuint)src1->nb[0];
+        nuint nb11 = (nuint)src1->nb[1];
+
+        nuint nb0 = (nuint)dst->nb[0];
+        nuint nb1 = (nuint)dst->nb[1];
+
+        Debug.Assert( nb0 == sizeof(float));
+        Debug.Assert(nb00 == sizeof(float));
+
+        if (nb10 == sizeof(float)) {
+            for (int j = ith; j < n; j += nth) {
+#if GGML_USE_ACCELERATE
+                vDSP_vadd(
+                    (float *) ((char *) src0->data + j*nb01), 1,
+                    (float *) ((char *) src1->data + j*nb11), 1,
+                    (float *) ((char *) dst->data  + j*nb1),  1, nc);
+#else
+                ggml_vec_add_f32(nc,
+                    (float *) ((byte *) dst->data  + (nuint)j*nb1),
+                    (float *) ((byte *) src0->data + (nuint)j*nb01),
+                    (float *) ((byte *) src1->data + (nuint)j*nb11));
+#endif
+            }
+        } else {
+            // src1 is not contiguous
+            for (int j = ith; j < n; j += nth) {
+                float * dst_ptr  = (float *) ((byte *) dst->data  + (nuint)j*nb1);
+                float * src0_ptr = (float *) ((byte *) src0->data + (nuint)j*nb01);
+                for (int i = 0; i < nc; i++) {
+                    float * src1_ptr = (float *) ((byte *) src1->data + (nuint)j*nb11 + (nuint)i*nb10);
+
+                    dst_ptr[i] = src0_ptr[i] + *src1_ptr;
+                }
+            }
+        }
+    }
+
+    static void ggml_compute_forward_add_f16_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        int ith = @params->ith; // thread index
+        int nth = @params->nth; // number of threads
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        nuint nb00 = (nuint)src0->nb[0];
+        nuint nb01 = (nuint)src0->nb[1];
+
+        nuint nb10 = (nuint)src1->nb[0];
+        nuint nb11 = (nuint)src1->nb[1];
+
+        nuint nb0 = (nuint)dst->nb[0];
+        nuint nb1 = (nuint)dst->nb[1];
+
+        Debug.Assert(src0->type == ggml_type.GGML_TYPE_F16);
+        Debug.Assert(src1->type == ggml_type.GGML_TYPE_F32);
+        Debug.Assert(dst->type == ggml_type.GGML_TYPE_F16);
+
+        Debug.Assert( nb0 == sizeof(float));
+        Debug.Assert(nb00 == sizeof(float));
+
+        if (nb10 == sizeof(float)) {
+            for (int j = ith; j < n; j += nth) {
+                Half * dst_ptr  = (Half *) ((byte *) dst->data  + (nuint)j*nb1);
+                Half * src0_ptr = (Half *) ((byte *) src0->data + (nuint)j*nb01);
+                for (int i = 0; i < nc; i++) {
+                    float * src1_ptr = (float *) ((byte *) src1->data + (nuint)j*nb11 + (nuint)i*nb10);
+                    dst_ptr[i] = (Half)((float)(src0_ptr[i]) + *src1_ptr);
+                }
+            }
+        } else {
+            // src1 is not contiguous
+            Debug.Assert(false);
+        }
+    }
+
+    static void ggml_compute_forward_add_f16_f16(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        int ith = @params->ith; // thread index
+        int nth = @params->nth; // number of threads
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        nuint nb00 = (nuint)src0->nb[0];
+        nuint nb01 = (nuint)src0->nb[1];
+
+        nuint nb10 = (nuint)src1->nb[0];
+        nuint nb11 = (nuint)src1->nb[1];
+
+        nuint nb0 = (nuint)dst->nb[0];
+        nuint nb1 = (nuint)dst->nb[1];
+
+        Debug.Assert(src0->type == ggml_type.GGML_TYPE_F16);
+        Debug.Assert(src1->type == ggml_type.GGML_TYPE_F16);
+        Debug.Assert(dst->type == ggml_type.GGML_TYPE_F16);
+
+        Debug.Assert( nb0 == sizeof(float));
+        Debug.Assert(nb00 == sizeof(float));
+
+        if (nb10 == (nuint)sizeof(Half)) {
+            for (int j = ith; j < n; j += nth) {
+                Half * dst_ptr  = (Half*) ((byte *) dst->data  + (nuint)j*nb1);
+                Half * src0_ptr = (Half*) ((byte *) src0->data + (nuint)j*nb01);
+                for (int i = 0; i < nc; i++) {
+                    Half* src1_ptr = (Half *) ((byte *) src1->data + (nuint)j*nb11 + (nuint)i*nb10);
+                    dst_ptr[i] = (Half)((float)(src0_ptr[i]) + (float)(*src1_ptr));
+                }
+            }
+        } else {
+            // src1 is not contiguous
+            Debug.Assert(false);
+        }
+    }
+
+    static void ggml_compute_forward_add_q_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        long ne00 = src0->ne[0];
+        long ne01 = src0->ne[1];
+        long ne02 = src0->ne[2];
+        long ne03 = src0->ne[3];
+
+        //long ne10 = src1->ne[0];
+        //long ne11 = src1->ne[1];
+        long ne12 = src1->ne[2];
+        long ne13 = src1->ne[3];
+
+        //long ne0  = dst->ne[0];
+        //long ne1  = dst->ne[1];
+        long ne2  = dst->ne[2];
+        long ne3  = dst->ne[3];
+
+        nuint nb00 = (nuint)src0->nb[0];
+        nuint nb01 = (nuint)src0->nb[1];
+        nuint nb02 = (nuint)src0->nb[2];
+        nuint nb03 = (nuint)src0->nb[3];
+
+        nuint nb10 = (nuint)src1->nb[0];
+        nuint nb11 = (nuint)src1->nb[1];
+        nuint nb12 = (nuint)src1->nb[2];
+        nuint nb13 = (nuint)src1->nb[3];
+
+        nuint nb0  = (nuint)dst->nb[0];
+        nuint nb1  = (nuint)dst->nb[1];
+        nuint nb2  = (nuint)dst->nb[2];
+        nuint nb3  = (nuint)dst->nb[3];
+
+        int ith = @params->ith;
+        int nth = @params->nth;
+
+        Debug.Assert(ne02 == ne12);
+        Debug.Assert(ne03 == ne13);
+        Debug.Assert(ne2  == ne12);
+        Debug.Assert(ne3  == ne13);
+
+        ggml_type type = src0->type;
+        var dequantize_row_q = quantize_fns[(int)type].dequantize_row_q;
+        var quantize_row_q = quantize_fns[(int)type].quantize_row_q;
+
+        // we don't support permuted src0 or src1
+        Debug.Assert(nb00 == (nuint)GGML_TYPE_SIZE[(int)type]);
+        Debug.Assert(nb10 == sizeof(float));
+
+        // dst cannot be transposed or permuted
+        Debug.Assert(nb0 <= nb1);
+        Debug.Assert(nb1 <= nb2);
+        Debug.Assert(nb2 <= nb3);
+
+        Debug.Assert(ggml_is_quantized(src0->type));
+        Debug.Assert(dst->type == src0->type);
+        Debug.Assert(src1->type == ggml_type.GGML_TYPE_F32);
+
+        // total rows in src0
+        long nr = ne01*ne02*ne03;
+
+        // rows per thread
+        int dr = (int)((nr + nth - 1)/nth);
+
+        // row range for this thread
+        int ir0 = dr*ith;
+        int ir1 = Math.Min(ir0 + dr, (int)nr);
+
+        float * wdata = (float *) @params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
+
+        for (int ir = ir0; ir < ir1; ++ir) {
+            // src0 indices
+            nuint i03 = (nuint)ir/(nuint)(ne02*ne01);
+            nuint i02 = ((nuint)ir - i03*(nuint)ne02*(nuint)ne01)/(nuint)ne01;
+            nuint i01 = ((nuint)ir - i03*(nuint)ne02*(nuint)ne01 - i02*(nuint)ne01);
+
+            // src1 and dst are same shape as src0 => same indices
+            nuint i13 = i03;
+            nuint i12 = i02;
+            nuint i11 = i01;
+
+            nuint i3 = i03;
+            nuint i2 = i02;
+            nuint i1 = i01;
+
+            void  * src0_row = (void *) ((byte *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+            float * src1_row = (float *)((byte *) src1->data + (i11*nb11 + i12*nb12 + i13*nb13));
+            void  * dst_row  = (void *) ((byte *)  dst->data + ( i1*nb1  +  i2*nb2  +  i3*nb0));
+
+            Debug.Assert(ne00 % 32 == 0);
+
+            // unquantize row from src0 to temp buffer
+            dequantize_row_q(src0_row, wdata, (int)ne00);
+            // add src1
+            ggml_vec_acc_f32((int)ne00, wdata, src1_row);
+            // quantize row to dst
+            quantize_row_q(wdata, dst_row, (int)ne00);
+        }
+    }
+
+    static void ggml_compute_forward_add(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        switch (src0->type) {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_add_f32(@params, src0, src1, dst);
+            } break;
+            case ggml_type.GGML_TYPE_F16:
+            {
+                if (src1->type == ggml_type.GGML_TYPE_F16) {
+                    ggml_compute_forward_add_f16_f16(@params, src0, src1, dst);
+                }
+                else if (src1->type == ggml_type.GGML_TYPE_F32) {
+                    ggml_compute_forward_add_f16_f32(@params, src0, src1, dst);
+                }
+                else {
+                    Debug.Assert(false);
+                }
+            } break;
+            case ggml_type.GGML_TYPE_Q4_0:
+            case ggml_type.GGML_TYPE_Q4_1:
+            case ggml_type.GGML_TYPE_Q4_2:
+            case ggml_type.GGML_TYPE_Q4_3:
+            case ggml_type.GGML_TYPE_Q5_0:
+            case ggml_type.GGML_TYPE_Q5_1:
+            case ggml_type.GGML_TYPE_Q8_0:
+            {
+                ggml_compute_forward_add_q_f32(@params, src0, src1, dst);
+            } break;
+            default:
+            {
+                Debug.Assert(false);
+            } break;
+        }
+    }
+
+    static void ggml_compute_forward_sub_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        Debug.Assert( dst->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src0->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src1->nb[0] == (nuint)sizeof(float));
+
+        for (int i = 0; i < n; i++) {
+            ggml_vec_sub_f32(nc,
+                    (float *) ((byte *) dst->data  + (ulong)i*( dst->nb[1])),
+                    (float *) ((byte *) src0->data + (ulong)i*(src0->nb[1])),
+                    (float *) ((byte *) src1->data + (ulong)i*(src1->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_sub(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+                {
+                    ggml_compute_forward_sub_f32 (@params, src0, src1, dst);
+                }
+                break;
+            default:
+                {
+                    Debug.Assert(false);
+                }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_mul_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        Debug.Assert( dst->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src0->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src1->nb[0] == (nuint)sizeof(float));
+
+        for (int i = 0; i < n; i++) {
+            ggml_vec_mul_f32(nc,
+                (float *) ((byte *) dst->data  + (ulong)i*( dst->nb[1])),
+                (float *) ((byte *) src0->data + (ulong)i*(src0->nb[1])),
+                (float *) ((byte *) src1->data + (ulong)i*(src1->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_mul(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_mul_f32 (@params, src0, src1, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_div_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, src1) && ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        Debug.Assert( dst->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src0->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src1->nb[0] == (nuint)sizeof(float));
+
+        for (int i = 0; i < n; i++) {
+            ggml_vec_div_f32(nc,
+                (float *) ((byte *) dst->data  + (ulong)i*( dst->nb[1])),
+                (float *) ((byte *) src0->data + (ulong)i*(src0->nb[1])),
+                (float *) ((byte *) src1->data + (ulong)i*(src1->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_div(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* src1,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_div_f32 (@params, src0, src1, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_sqr_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        Debug.Assert( dst->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src0->nb[0] == (nuint)sizeof(float));
+
+        for (int i = 0; i < n; i++) {
+            ggml_vec_sqr_f32(nc,
+                (float *) ((byte *) dst->data  + (ulong)i*( dst->nb[1])),
+                (float *) ((byte *) src0->data + (ulong)i*(src0->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_sqr(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_sqr_f32 (@params, src0, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_sqrt_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        int n  = ggml_nrows(src0);
+        int nc = (int)src0->ne[0];
+
+        Debug.Assert( dst->nb[0] == (nuint)sizeof(float));
+        Debug.Assert(src0->nb[0] == (nuint)sizeof(float));
+
+        for (int i = 0; i < n; i++) {
+            ggml_vec_sqrt_f32(nc,
+                (float *) ((byte *) dst->data  + (ulong)i*( dst->nb[1])),
+                (float *) ((byte *) src0->data + (ulong)i*(src0->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_sqrt(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_sqrt_f32 (@params, src0, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_sum_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_is_scalar(dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        Debug.Assert(src0->nb[0] == sizeof(float));
+
+        nuint ne00 = (nuint)src0->ne[0];
+        nuint ne01 = (nuint)src0->ne[1];
+        nuint ne02 = (nuint)src0->ne[2];
+        nuint ne03 = (nuint)src0->ne[3];
+
+        nuint nb01 = (nuint)src0->nb[1];
+        nuint nb02 = (nuint)src0->nb[2];
+        nuint nb03 = (nuint)src0->nb[3];
+
+        double sum     = 0;
+        double row_sum = 0;
+
+        for (nuint i03 = 0; i03 < ne03; i03++) {
+            for (nuint i02 = 0; i02 < ne02; i02++) {
+                for (nuint i01 = 0; i01 < ne01; i01++) {
+                    ggml_vec_sum_ggf((int)ne00,
+                        &row_sum,
+                        (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
+                    sum += row_sum;
+                }
+            }
+        }
+        ((float *) dst->data)[0] = (float)sum;
+    }
+
+    static void ggml_compute_forward_sum(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_sum_f32 (@params, src0, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_mean_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        Debug.Assert(src0->nb[0] == sizeof(float));
+
+        nuint ne00 = (nuint)src0->ne[0];
+        nuint ne01 = (nuint)src0->ne[1];
+        nuint ne02 = (nuint)src0->ne[2];
+        nuint ne03 = (nuint)src0->ne[3];
+
+        nuint nb01 = (nuint)src0->nb[1];
+        nuint nb02 = (nuint)src0->nb[2];
+        nuint nb03 = (nuint)src0->nb[3];
+
+        nuint ne0 = (nuint)dst->ne[0];
+        nuint ne1 = (nuint)dst->ne[1];
+        nuint ne2 = (nuint)dst->ne[2];
+        nuint ne3 = (nuint)dst->ne[3];
+
+        Debug.Assert(ne0 == 1);
+        Debug.Assert(ne1 == ne01);
+        Debug.Assert(ne2 == ne02);
+        Debug.Assert(ne3 == ne03);
+
+        nuint nb1 = (nuint)dst->nb[1];
+        nuint nb2 = (nuint)dst->nb[2];
+        nuint nb3 = (nuint)dst->nb[3];
+
+        for (nuint i03 = 0; i03 < ne03; i03++) {
+            for (nuint i02 = 0; i02 < ne02; i02++) {
+                for (nuint i01 = 0; i01 < ne01; i01++) {
+                    ggml_vec_sum_f32((int)ne00,
+                        (float *) ((byte *)  dst->data + i01*nb1  + i02*nb2  + i03*nb3),
+                        (float *) ((byte *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
+
+                    *(float *) ((byte *) dst->data + i01*nb1 + i02*nb2 + i03*nb3) /= (float) ne00;
+                }
+            }
+        }
+    }
+
+    static void ggml_compute_forward_mean(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_mean_f32 (@params, src0, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
     }
 
     public static ggml_tensor* ggml_add(
@@ -4150,23 +5626,272 @@ public static unsafe class Ggml
         Console.Write(format, args);
     }
 
-    static int ggml_thread_create(int* @out, void* unused, delegate*unmanaged <void*, int> func, void* arg)
+    static void ggml_graph_compute_thread(object? data)
     {
-        throw new NotImplementedException();
+        ggml_compute_state state = (ggml_compute_state)data!;
+        int n_threads = state.shared->n_threads;
+        ggml_compute_state_shared* shared = state.shared;
+        while (true) {
+            if (atomic_fetch_add(ref state.shared->n_ready, 1) == n_threads - 1) {
+                atomic_store(ref state.shared->has_work, 0);
+            } else {
+                while (atomic_load(ref state.shared->has_work) != 0) {
+                    if (atomic_load(ref state.shared->stop) != 0) {
+                        return;
+                    }
+                    ggml_lock_lock(&shared->spin);
+                    ggml_lock_unlock(&shared->spin);
+                }
+            }
+
+            atomic_fetch_sub(ref state.shared->n_ready, 1);
+
+            // wait for work
+            while (atomic_load(ref state.shared->has_work) == 0)
+            {
+                if (atomic_load(ref state.shared->stop) != 0)
+                {
+                    return;
+                }
+                ggml_lock_lock(&state.shared->spin);
+                ggml_lock_unlock(&state.shared->spin);
+            }
+
+            // check if we should stop
+            if (atomic_load(ref state.shared->stop) != 0)
+            {
+                break;
+            }
+
+            if (state.node is not null) {
+                if (state.@params.ith < state.@params.nth) {
+                    ggml_compute_forward(ref state.@params, state.node);
+                }
+
+                state.node = null;
+            } else {
+                break;
+            }
+        }
     }
 
-    static int ggml_thread_join(int thread, void* unused)
-    {
-        throw new NotImplementedException();
-    }
-
-    [UnmanagedCallersOnly]
-    static int ggml_graph_compute_thread(void* data)
-    {
-        throw new NotImplementedException();
-    }
     static void ggml_compute_forward(ggml_compute_params* @params, ggml_tensor* tensor)
     {
-        throw new NotImplementedException();
+        Debug.Assert(@params is not null);
+
+        switch (tensor->op)
+        {
+            case ggml_op.GGML_OP_DUP:
+                {
+                    ggml_compute_forward_dup (@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_ADD:
+                {
+                    ggml_compute_forward_add(@params, tensor->src0, tensor->src1, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_SUB:
+                {
+                    ggml_compute_forward_sub(@params, tensor->src0, tensor->src1, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_MUL:
+                {
+                    ggml_compute_forward_mul(@params, tensor->src0, tensor->src1, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_DIV:
+                {
+                    ggml_compute_forward_div(@params, tensor->src0, tensor->src1, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_SQR:
+                {
+                    ggml_compute_forward_sqr(@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_SQRT:
+                {
+                    ggml_compute_forward_sqrt(@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_SUM:
+                {
+                    ggml_compute_forward_sum(@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_MEAN:
+                {
+                    ggml_compute_forward_mean(@params, tensor->src0, tensor);
+                }
+                break;
+            // case ggml_op.GGML_OP_REPEAT:
+            //     {
+            //         ggml_compute_forward_repeat(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_ABS:
+            //     {
+            //         ggml_compute_forward_abs(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_SGN:
+            //     {
+            //         ggml_compute_forward_sgn(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_NEG:
+            //     {
+            //         ggml_compute_forward_neg(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_STEP:
+            //     {
+            //         ggml_compute_forward_step(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_RELU:
+            //     {
+            //         ggml_compute_forward_relu(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_GELU:
+            //     {
+            //         ggml_compute_forward_gelu(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_SILU:
+            //     {
+            //         ggml_compute_forward_silu(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_NORM:
+            //     {
+            //         ggml_compute_forward_norm(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_RMS_NORM:
+            //     {
+            //         ggml_compute_forward_rms_norm(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_MUL_MAT:
+            //     {
+            //         ggml_compute_forward_mul_mat(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_SCALE:
+            //     {
+            //         ggml_compute_forward_scale(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_CPY:
+            //     {
+            //         ggml_compute_forward_cpy(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_CONT:
+            //     {
+            //         ggml_compute_forward_cont(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_RESHAPE:
+            //     {
+            //         ggml_compute_forward_reshape(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_VIEW:
+            //     {
+            //         ggml_compute_forward_view(@params, tensor->src0);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_PERMUTE:
+            //     {
+            //         ggml_compute_forward_permute(@params, tensor->src0);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_TRANSPOSE:
+            //     {
+            //         ggml_compute_forward_transpose(@params, tensor->src0);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_GET_ROWS:
+            //     {
+            //         ggml_compute_forward_get_rows(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_DIAG_MASK_INF:
+            //     {
+            //         ggml_compute_forward_diag_mask_inf(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_SOFT_MAX:
+            //     {
+            //         ggml_compute_forward_soft_max(@params, tensor->src0, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_ROPE:
+            //     {
+            //         ggml_compute_forward_rope(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_ALIBI:
+            //     {
+            //         ggml_compute_forward_alibi(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_CONV_1D_1S:
+            //     {
+            //         ggml_compute_forward_conv_1d_1s(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_CONV_1D_2S:
+            //     {
+            //         ggml_compute_forward_conv_1d_2s(@params, tensor->src0, tensor->src1, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_FLASH_ATTN:
+            //     {
+            //         int32_t t = ggml_get_i32_1d(tensor->opt[1], 0);
+            //         Debug.Assert(t == 0 || t == 1);
+            //         bool masked = t != 0;
+            //         ggml_compute_forward_flash_attn(@params, tensor->src0, tensor->src1, tensor->opt[0], masked, tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_FLASH_FF:
+            //     {
+            //         ggml_compute_forward_flash_ff(@params, tensor->src0, tensor->src1, tensor->opt[0], tensor->opt[1], tensor->opt[2], tensor);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_MAP_UNARY:
+            //     {
+            //         ggml_unary_op_f32_t fun = *((ggml_unary_op_f32_t*)tensor->opt[0]->data);
+            //         ggml_compute_forward_map_unary(@params, tensor->src0, tensor, fun);
+            //     }
+            //     break;
+            // case ggml_op.GGML_OP_MAP_BINARY:
+            //     {
+            //         ggml_binary_op_f32_t fun = *((ggml_binary_op_f32_t*)tensor->opt[0]->data);
+            //         ggml_compute_forward_map_binary(@params, tensor->src0, tensor->src1, tensor, fun);
+            //     }
+            //     break;
+            case ggml_op.GGML_OP_NONE:
+                {
+                    // nop
+                }
+                break;
+            case ggml_op.GGML_OP_COUNT:
+                {
+                    Debug.Assert(false);
+                }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward(ref ggml_compute_params @params, ggml_tensor* tensor)
+    {
+        fixed (ggml_compute_params* p = &@params)
+            ggml_compute_forward(p, tensor);
     }
 }

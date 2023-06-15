@@ -328,10 +328,10 @@ public struct ggml_compute_state_shared
     public volatile int stop; // stop all threads
 };
 
-public unsafe struct ggml_compute_state
+public unsafe class ggml_compute_state
 {
     // ggml_thread_t thrd;
-    public int thrd;
+    public Thread thrd;
 
     public ggml_compute_params @params;
     public ggml_tensor * node;
