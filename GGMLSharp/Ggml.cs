@@ -1541,7 +1541,7 @@ public static unsafe class Ggml
         ctx->scratch_save = ctx->scratch;
         ctx->scratch.data = null;
 
-        ggml_tensor* result = ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_I32, 1);
+        ggml_tensor* result = ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, 1);
 
         ctx->scratch = ctx->scratch_save;
 
@@ -1702,7 +1702,7 @@ public static unsafe class Ggml
     static void ggml_vec_add_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
     static void ggml_vec_acc_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] += x[i]; }
     static void ggml_vec_acc1_f32(int n, float* y, float v) { for (int i = 0; i < n; ++i) y[i] += v; }
-    static void ggml_vec_sub_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+    static void ggml_vec_sub_f32(int n, float* z, float* x, float* y) { for (int i = 0; i < n; ++i) z[i]  = x[i] - y[i]; }
     static void ggml_vec_set_f32(int n, float* y, float v) { for (int i = 0; i < n; ++i) y[i] = v; }
     static void ggml_vec_cpy_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = x[i]; }
     static void ggml_vec_neg_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = -x[i]; }
@@ -3903,7 +3903,7 @@ public static unsafe class Ggml
                 for (nuint i01 = 0; i01 < ne01; i01++) {
                     ggml_vec_sum_ggf((int)ne00,
                         &row_sum,
-                        (float *) ((char *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
+                        (float *) ((byte *) src0->data + i01*nb01 + i02*nb02 + i03*nb03));
                     sum += row_sum;
                 }
             }
@@ -3996,6 +3996,161 @@ public static unsafe class Ggml
             {
                 Debug.Assert(false);
             }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_repeat_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_can_repeat(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE) {
+            return;
+        }
+
+        // TODO: implement support for rank > 2 tensors
+        Debug.Assert(src0->ne[2] == 1);
+        Debug.Assert(src0->ne[3] == 1);
+        Debug.Assert( dst->ne[2] == 1);
+        Debug.Assert( dst->ne[3] == 1);
+
+        nuint nc  = (nuint)dst->ne[0];
+        nuint nr  = (nuint)dst->ne[1];
+        nuint nc0 = (nuint)src0->ne[0];
+        nuint nr0 = (nuint)src0->ne[1];
+        nuint ncr = nc/nc0; // guaranteed to be an integer due to the check in ggml_can_repeat
+        nuint nrr = nr/nr0; // guaranteed to be an integer due to the check in ggml_can_repeat
+
+        // TODO: support for transposed / permuted tensors
+        Debug.Assert( dst->nb[0] == sizeof(float));
+        Debug.Assert(src0->nb[0] == sizeof(float));
+
+        // TODO: maybe this is not optimal?
+        for (nuint i = 0; i < nrr; i++) {
+            for (nuint j = 0; j < ncr; j++) {
+                for (nuint k = 0; k < nr0; k++) {
+                    ggml_vec_cpy_f32((int)nc0,
+                        (float *) ((byte *)  dst->data + (i*nr0 + k)*( dst->nb[1]) + j*nc0*( dst->nb[0])),
+                        (float *) ((byte *) src0->data + (        k)*(src0->nb[1])));
+                }
+            }
+        }
+    }
+
+    static void ggml_compute_forward_repeat(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+            {
+                ggml_compute_forward_repeat_f32 (@params, src0, dst);
+            }
+                break;
+            default:
+            {
+                Debug.Assert(false);
+            }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_abs_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        nuint n = (nuint)ggml_nrows(src0);
+        nuint nc = (nuint)src0->ne[0];
+
+        Debug.Assert(dst->nb[0] == sizeof(float));
+        Debug.Assert(src0->nb[0] == sizeof(float));
+
+        for (nuint i = 0; i < n; i++)
+        {
+            ggml_vec_abs_f32((int)nc,
+                    (float*)((byte*)dst->data + i * (dst->nb[1])),
+                    (float*)((byte*)src0->data + i * (src0->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_abs(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+                {
+                    ggml_compute_forward_abs_f32(@params, src0, dst);
+                }
+                break;
+            default:
+                {
+                    Debug.Assert(false);
+                }
+                break;
+        }
+    }
+
+    static void ggml_compute_forward_sgn_f32(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        Debug.Assert(@params->ith == 0);
+        Debug.Assert(ggml_are_same_shape(src0, dst));
+
+        if (@params->type == ggml_task_type.GGML_TASK_INIT || @params->type == ggml_task_type.GGML_TASK_FINALIZE)
+        {
+            return;
+        }
+
+        nuint n = (nuint)ggml_nrows(src0);
+        nuint nc = (nuint)src0->ne[0];
+
+        Debug.Assert(dst->nb[0] == sizeof(float));
+        Debug.Assert(src0->nb[0] == sizeof(float));
+
+        for (nuint i = 0; i < n; i++)
+        {
+            ggml_vec_sgn_f32((int)nc,
+                    (float*)((byte*)dst->data + i * (dst->nb[1])),
+                    (float*)((byte*)src0->data + i * (src0->nb[1])));
+        }
+    }
+
+    static void ggml_compute_forward_sgn(
+        ggml_compute_params* @params,
+        ggml_tensor* src0,
+        ggml_tensor* dst)
+    {
+        switch (src0->type)
+        {
+            case ggml_type.GGML_TYPE_F32:
+                {
+                    ggml_compute_forward_sgn_f32(@params, src0, dst);
+                }
+                break;
+            default:
+                {
+                    Debug.Assert(false);
+                }
                 break;
         }
     }
@@ -5726,21 +5881,21 @@ public static unsafe class Ggml
                     ggml_compute_forward_mean(@params, tensor->src0, tensor);
                 }
                 break;
-            // case ggml_op.GGML_OP_REPEAT:
-            //     {
-            //         ggml_compute_forward_repeat(@params, tensor->src0, tensor);
-            //     }
-            //     break;
-            // case ggml_op.GGML_OP_ABS:
-            //     {
-            //         ggml_compute_forward_abs(@params, tensor->src0, tensor);
-            //     }
-            //     break;
-            // case ggml_op.GGML_OP_SGN:
-            //     {
-            //         ggml_compute_forward_sgn(@params, tensor->src0, tensor);
-            //     }
-            //     break;
+            case ggml_op.GGML_OP_REPEAT:
+                {
+                    ggml_compute_forward_repeat(@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_ABS:
+                {
+                    ggml_compute_forward_abs(@params, tensor->src0, tensor);
+                }
+                break;
+            case ggml_op.GGML_OP_SGN:
+                {
+                    ggml_compute_forward_sgn(@params, tensor->src0, tensor);
+                }
+                break;
             // case ggml_op.GGML_OP_NEG:
             //     {
             //         ggml_compute_forward_neg(@params, tensor->src0, tensor);
