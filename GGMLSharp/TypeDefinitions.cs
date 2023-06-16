@@ -348,3 +348,99 @@ public unsafe struct quantize_fns_t
     public delegate* unmanaged<int, float*, void*, void*, void> vec_dot_q;
     public ggml_type     vec_dot_type;
 };
+
+//
+// optimization
+//
+
+// optimization methods
+public enum ggml_opt_type {
+    GGML_OPT_ADAM,
+    GGML_OPT_LBFGS,
+};
+
+// linesearch methods
+public enum ggml_linesearch {
+    GGML_LINESEARCH_DEFAULT = 1,
+
+    GGML_LINESEARCH_BACKTRACKING_ARMIJO       = 0,
+    GGML_LINESEARCH_BACKTRACKING_WOLFE        = 1,
+    GGML_LINESEARCH_BACKTRACKING_STRONG_WOLFE = 2,
+};
+
+// optimization return values
+public enum ggml_opt_result {
+    GGML_OPT_OK = 0,
+    GGML_OPT_DID_NOT_CONVERGE,
+    GGML_OPT_NO_CONTEXT,
+    GGML_OPT_INVALID_WOLFE,
+    GGML_OPT_FAIL,
+
+    GGML_LINESEARCH_FAIL = -128,
+    GGML_LINESEARCH_MINIMUM_STEP,
+    GGML_LINESEARCH_MAXIMUM_STEP,
+    GGML_LINESEARCH_MAXIMUM_ITERATIONS,
+    GGML_LINESEARCH_INVALID_PARAMETERS,
+};
+
+// ADAM parameters
+public unsafe struct ggml_opt_params_adam
+{
+    public int n_iter;
+
+    public float alpha; // learning rate
+    public float beta1;
+    public float beta2;
+    public float eps;   // epsilon for numerical stability
+    public float eps_f; // epsilon for convergence test
+    public float eps_g; // epsilon for convergence test
+}
+
+// LBFGS parameters
+public unsafe struct ggml_opt_params_lbfgs {
+    public int m; // number of corrections to approximate the inv. Hessian
+    public int n_iter;
+    public int max_linesearch;
+
+    public float eps;      // convergence tolerance
+    public float ftol;     // line search tolerance
+    public float wolfe;
+    public float min_step;
+    public float max_step;
+
+    public ggml_linesearch linesearch;
+}
+
+// optimization parameters
+//
+//   see ggml.c (ggml_opt_default_params) for default values
+//
+public unsafe struct ggml_opt_params {
+    public ggml_opt_type type;
+
+    public int n_threads;
+
+    // delta-based convergence test
+    //
+    //   if past == 0 - disabled
+    //   if past > 0:
+    //     stop if |f(x) - f(x_past)| < delta * max(1, |f(x)|)
+    //
+    public int past;
+    public float delta;
+
+    // maximum number of iterations without improvement
+    //
+    //   if 0 - disabled
+    //   if > 0:
+    //     assume convergence if no cost improvement in this number of iterations
+    //
+    public int max_no_improvement;
+
+    public bool print_forward_graph;
+    public bool print_backward_graph;
+
+    public ggml_opt_params_adam adam;
+
+    public ggml_opt_params_lbfgs lbfgs;
+};

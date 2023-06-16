@@ -100,6 +100,53 @@ public static unsafe class Ggml
         /*[GGML_TYPE_I32]  = */ "i32",
     };
 
+    private static string[] GGML_OP_LABEL = new string[(int)ggml_op.GGML_OP_COUNT] {
+        "NONE",
+
+        "DUP",
+        "ADD",
+        "SUB",
+        "MUL",
+        "DIV",
+        "SQR",
+        "SQRT",
+        "SUM",
+        "MEAN",
+        "REPEAT",
+        "ABS",
+        "SGN",
+        "NEG",
+        "STEP",
+        "RELU",
+        "GELU",
+        "SILU",
+        "NORM",
+        "RMS_NORM",
+
+        "MUL_MAT",
+
+        "SCALE",
+        "CPY",
+        "CONT",
+        "RESHAPE",
+        "VIEW",
+        "PERMUTE",
+        "TRANSPOSE",
+        "GET_ROWS",
+        "DIAG_MASK_INF",
+        "SOFT_MAX",
+        "ROPE",
+        "ALIBI",
+        "CONV_1D_1S",
+        "CONV_1D_2S",
+
+        "FLASH_ATTN",
+        "FLASH_FF",
+
+        "MAP_UNARY",
+        "MAP_BINARY",
+    };
+
     private static string[] GGML_OP_SYMBOL = new string[(int)ggml_op.GGML_OP_COUNT] {
         "none",
 
@@ -1299,6 +1346,66 @@ public static unsafe class Ggml
         }
         *s = sumf;
     }
+    
+    static void ggml_vec_mad_f32(int n, float * y, float * x, float v) {
+#if GGML_SIMD
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
+
+    GGML_F32_VEC ax[GGML_F32_ARR];
+    GGML_F32_VEC ay[GGML_F32_ARR];
+
+    for (int i = 0; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; j++) {
+            ax[j] = GGML_F32_VEC_LOAD(x + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_FMA(ay[j], ax[j], vx);
+
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay[j]);
+        }
+    }
+
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] += x[i]*v;
+    }
+#else
+        // scalar
+        for (int i = 0; i < n; ++i) {
+            y[i] += x[i]*v;
+        }
+#endif
+    }
+    
+    static void ggml_vec_scale_f32(int n, float * y, float   v) {
+#if GGML_SIMD
+    const int np = (n & ~(GGML_F32_STEP - 1));
+
+    GGML_F32_VEC vx = GGML_F32_VEC_SET1(v);
+
+    GGML_F32_VEC ay[GGML_F32_ARR];
+
+    for (int i = 0; i < np; i += GGML_F32_STEP) {
+        for (int j = 0; j < GGML_F32_ARR; j++) {
+            ay[j] = GGML_F32_VEC_LOAD(y + i + j*GGML_F32_EPR);
+            ay[j] = GGML_F32_VEC_MUL(ay[j], vx);
+
+            GGML_F32_VEC_STORE(y + i + j*GGML_F32_EPR, ay[j]);
+        }
+    }
+
+    // leftovers
+    for (int i = np; i < n; ++i) {
+        y[i] *= v;
+    }
+#else
+        // scalar
+        for (int i = 0; i < n; ++i) {
+            y[i] *= v;
+        }
+#endif
+    }
 
     public static ggml_context* ggml_init(ggml_init_params @params)
     {
@@ -1450,6 +1557,652 @@ public static unsafe class Ggml
         }
 
         ggml_critical_section_end();
+    }
+
+
+
+//
+// ADAM
+//
+//   ref: https://arxiv.org/pdf/1412.6980.pdf
+//
+
+static ggml_opt_result ggml_opt_adam(
+        ggml_context * ctx,
+        ggml_opt_params @params,
+        ggml_tensor * f,
+        ggml_cgraph * gf,
+        ggml_cgraph * gb) {
+    Debug.Assert(ggml_is_scalar(f));
+
+    gf->n_threads = @params.n_threads;
+    gb->n_threads = @params.n_threads;
+
+    // these will store the parameters we want to optimize
+    ggml_tensor ** ps = stackalloc ggml_tensor*[GGML_MAX_PARAMS];
+
+    int np = 0;
+    int nx = 0;
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        if (gf->get_node(i)->is_param) {
+            GGML_PRINT_DEBUG("found param {0}: grad->op = {1}\n", np, gf->get_node(i)->grad->op);
+
+            Debug.Assert(np < GGML_MAX_PARAMS);
+
+            ps[np++] = gf->get_node(i);
+            nx += (int)ggml_nelements(gf->get_node(i));
+        }
+    }
+
+    // constants
+    float alpha = @params.adam.alpha;
+    float beta1 = @params.adam.beta1;
+    float beta2 = @params.adam.beta2;
+    float eps   = @params.adam.eps;
+
+    float * x  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // view of the parameters
+    float * g1 = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // gradient
+    float * g2 = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // gradient squared
+    float * m  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // first moment
+    float * v  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // second moment
+    float * mh = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // first moment hat
+    float * vh = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // second moment hat
+
+    float * pf = @params.past > 0 ? (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, @params.past)->data : null; // past function values
+
+    // initialize
+    ggml_vec_set_f32(nx, m, 0.0f);
+    ggml_vec_set_f32(nx, v, 0.0f);
+
+    // update view
+    ggml_opt_get_params(np, ps, x);
+
+    // compute the function value
+    ggml_graph_reset  (gf);
+    ggml_set_f32      (f->grad, 1.0f);
+    ggml_graph_compute(ctx, gb);
+
+    float fx_prev = ggml_get_f32_1d(f, 0);
+    if (pf is not null) {
+        pf[0] = fx_prev;
+    }
+
+    int n_no_improvement = 0;
+    float fx_best = fx_prev;
+
+    // run the optimizer
+    for (int t = 0; t < @params.adam.n_iter; ++t) {
+        GGML_PRINT_DEBUG  ($"=== iter {t} ===\n");
+
+        GGML_PRINT_DEBUG  ("f      = {0,10:F6}\n", ggml_get_f32_1d(f, 0));
+        GGML_PRINT_DEBUG_5("df/dx0 = {0,10:F6}\n", ggml_get_f32_1d(ps[0]->grad, 0));
+        GGML_PRINT_DEBUG_5("df/dx1 = {0,10:F6}\n", ggml_get_f32_1d(ps[1]->grad, 0));
+
+        for (int i = 0; i < np; ++i) {
+            GGML_PRINT_DEBUG("param {0}: {1,10:F6}, g = {2,10:F6}\n", i,
+                    ggml_get_f32_1d(ps[i], 0), ggml_get_f32_1d(ps[i]->grad, 0));
+        }
+
+        long t_start_wall = ggml_time_us();
+        long t_start_cpu = ggml_cycles();
+
+        {
+            // update the gradient
+            ggml_opt_get_grad(np, ps, g1);
+
+            // m_t = beta1*m_t-1 + (1 - beta1)*g_t
+            ggml_vec_scale_f32(nx, m, beta1);
+            ggml_vec_mad_f32  (nx, m, g1, 1.0f - beta1);
+
+            // g2 = g1^2
+            ggml_vec_sqr_f32  (nx, g2, g1);
+
+            // v_t = beta2*v_t-1 + (1 - beta2)*g_t^2
+            ggml_vec_scale_f32(nx, v, beta2);
+            ggml_vec_mad_f32  (nx, v, g2, 1.0f - beta2);
+
+            // m^hat = m_t / (1 - beta1^t)
+            // v^hat = v_t / (1 - beta2^t)
+            // x_t = x_t-1 - alpha*m^hat/(sqrt(v^hat) + eps)
+            ggml_vec_cpy_f32  (nx, mh, m);
+            ggml_vec_cpy_f32  (nx, vh, v);
+
+            ggml_vec_scale_f32(nx, mh, alpha/(1.0f - MathF.Pow(beta1, t + 1)));
+            ggml_vec_scale_f32(nx, vh,  1.0f/(1.0f - MathF.Pow(beta2, t + 1)));
+
+            ggml_vec_sqrt_f32 (nx, vh, vh);
+            ggml_vec_acc1_f32 (nx, vh, eps);
+
+            ggml_vec_div_f32  (nx, mh, mh, vh);
+            ggml_vec_sub_f32  (nx, x,  x,  mh);
+
+            // update the parameters
+            ggml_opt_set_params(np, ps, x);
+        }
+
+        ggml_graph_reset  (gf);
+        ggml_set_f32      (f->grad, 1.0f);
+        ggml_graph_compute(ctx, gb);
+
+        float fx = ggml_get_f32_1d(f, 0);
+
+        // check convergence
+        if (MathF.Abs(fx - fx_prev)/fx < @params.adam.eps_f) {
+            GGML_PRINT_DEBUG("converged\n");
+
+            return ggml_opt_result.GGML_OPT_OK;
+        }
+
+        // delta-based convergence test
+        if (pf != null) {
+            // need at least params.past iterations to start checking for convergence
+            if (@params.past <= t) {
+                float rate = (pf[t%@params.past] - fx)/fx;
+
+                if (MathF.Abs(rate) < @params.delta) {
+                    return ggml_opt_result.GGML_OPT_OK;
+                }
+            }
+
+            pf[t%@params.past] = fx;
+        }
+
+        // check for improvement
+        if (@params.max_no_improvement > 0) {
+            if (fx_best > fx) {
+                fx_best = fx;
+                n_no_improvement = 0;
+            } else {
+                ++n_no_improvement;
+
+                if (n_no_improvement >= @params.max_no_improvement) {
+                    return ggml_opt_result.GGML_OPT_OK;
+                }
+            }
+        }
+
+        fx_prev = fx;
+
+        {
+            long t_end_cpu = ggml_cycles();
+            GGML_PRINT_DEBUG("time iter:      {0,5:F3} s\n", ((float)(t_end_cpu - t_start_cpu))/CLOCKS_PER_SEC);
+
+            long t_end_wall = ggml_time_us();
+            GGML_PRINT_DEBUG("wall time iter: {0,5:F3} s\n", (t_end_wall - t_start_wall)/1e6);
+        }
+    }
+
+    return ggml_opt_result.GGML_OPT_DID_NOT_CONVERGE;
+}
+
+//
+// L-BFGS
+//
+// the L-BFGS implementation below is based on the following implementation:
+//
+//   https://github.com/chokkan/liblbfgs
+//
+
+struct ggml_lbfgs_iteration_data {
+    public float alpha;
+    public float ys;
+    public float * s;
+    public float * y;
+};
+
+static ggml_opt_result linesearch_backtracking(
+        ggml_context * ctx,
+        ggml_opt_params * @params,
+        int nx,
+        float * x,
+        float * fx,
+        float * g,
+        float * d,
+        float * step,
+        float * xp,
+        ggml_tensor * f,
+        ggml_cgraph * gf,
+        ggml_cgraph * gb,
+        int np,
+        ggml_tensor ** ps) {
+    int count = 0;
+
+    float width  = 0.0f;
+    float dg     = 0.0f;
+    float finit  = 0.0f;
+    float dginit = 0.0f;
+    float dgtest = 0.0f;
+
+    const float dec = 0.5f;
+    const float inc = 2.1f;
+
+    if (*step <= 0.0f) {
+        return ggml_opt_result.GGML_LINESEARCH_INVALID_PARAMETERS;
+    }
+
+    // compute the initial gradient in the search direction
+    ggml_vec_dot_f32(nx, &dginit, g, d);
+
+    // make sure that d points to a descent direction
+    if (0 < dginit) {
+        return ggml_opt_result.GGML_LINESEARCH_FAIL;
+    }
+
+    // initialize local variables
+    finit = *fx;
+    dgtest = @params->lbfgs.ftol*dginit;
+
+    while (true) {
+        ggml_vec_cpy_f32(nx, x, xp);
+        ggml_vec_mad_f32(nx, x, d, *step);
+
+        // evaluate the function and gradient values
+        {
+            ggml_opt_set_params(np, ps, x);
+
+            ggml_graph_reset  (gf);
+            ggml_set_f32      (f->grad, 1.0f);
+            ggml_graph_compute(ctx, gb);
+
+            ggml_opt_get_grad(np, ps, g);
+
+            *fx = ggml_get_f32_1d(f, 0);
+        }
+
+        ++count;
+
+        if (*fx > finit + (*step)*dgtest) {
+            width = dec;
+        } else {
+            // Armijo condition is satisfied
+            if (@params->lbfgs.linesearch == ggml_linesearch.GGML_LINESEARCH_BACKTRACKING_ARMIJO) {
+                return (ggml_opt_result)count;
+            }
+
+            ggml_vec_dot_f32(nx, &dg, g, d);
+
+            // check the Wolfe condition
+            if (dg < @params->lbfgs.wolfe * dginit) {
+                width = inc;
+            } else {
+                if(@params->lbfgs.linesearch == ggml_linesearch.GGML_LINESEARCH_BACKTRACKING_WOLFE) {
+                    // regular Wolfe conditions
+                    return (ggml_opt_result)count;
+                }
+
+                if(dg > -@params->lbfgs.wolfe*dginit) {
+                    width = dec;
+                } else {
+                    // strong Wolfe condition (GGML_LINESEARCH_BACKTRACKING_STRONG_WOLFE)
+                    return (ggml_opt_result)count;
+                }
+                return (ggml_opt_result)count;
+            }
+        }
+
+        if (*step < @params->lbfgs.min_step) {
+            return ggml_opt_result.GGML_LINESEARCH_MINIMUM_STEP;
+        }
+        if (*step > @params->lbfgs.max_step) {
+            return ggml_opt_result.GGML_LINESEARCH_MAXIMUM_STEP;
+        }
+        if (@params->lbfgs.max_linesearch <= count) {
+            return ggml_opt_result.GGML_LINESEARCH_MAXIMUM_ITERATIONS;
+        }
+
+        (*step) *= width;
+    }
+
+    return ggml_opt_result.GGML_LINESEARCH_FAIL;
+}
+
+static ggml_opt_result ggml_opt_lbfgs(
+        ggml_context * ctx,
+        ggml_opt_params @params,
+        ggml_tensor * f,
+        ggml_cgraph * gf,
+        ggml_cgraph * gb) {
+    if (@params.lbfgs.linesearch == ggml_linesearch.GGML_LINESEARCH_BACKTRACKING_WOLFE ||
+        @params.lbfgs.linesearch == ggml_linesearch.GGML_LINESEARCH_BACKTRACKING_STRONG_WOLFE) {
+        if (@params.lbfgs.wolfe <= @params.lbfgs.ftol || 1.0f <= @params.lbfgs.wolfe) {
+            return ggml_opt_result.GGML_OPT_INVALID_WOLFE;
+        }
+    }
+
+    gf->n_threads = @params.n_threads;
+    gb->n_threads = @params.n_threads;
+
+    int m = @params.lbfgs.m;
+
+    // these will store the parameters we want to optimize
+    ggml_tensor ** ps = stackalloc ggml_tensor*[GGML_MAX_PARAMS];
+
+    int np = 0;
+    int nx = 0;
+    for (int i = 0; i < gf->n_nodes; ++i) {
+        if (gf->get_node(i)->is_param) {
+            GGML_PRINT_DEBUG("found param %d: grad->op = %d\n", np, gf->get_node(i)->grad->op);
+
+            Debug.Assert(np < GGML_MAX_PARAMS);
+
+            ps[np++] = gf->get_node(i);
+            nx += (int)ggml_nelements(gf->get_node(i));
+        }
+    }
+
+    float * x  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // current parameters
+    float * xp = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // previous parameters
+    float * g  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // current gradient
+    float * gp = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // previous gradient
+    float * d  = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data; // search direction
+
+    float * pf = @params.past > 0 ? (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, @params.past)->data : null; // past function values
+
+    float fx    = 0.0f; // cost function value
+    float xnorm = 0.0f; // ||x||
+    float gnorm = 0.0f; // ||g||
+    float step  = 0.0f;
+
+    // initialize x from the graph nodes
+    ggml_opt_get_params(np, ps, x);
+
+    // the L-BFGS memory
+    ggml_lbfgs_iteration_data * lm = stackalloc ggml_lbfgs_iteration_data[m];
+
+    for (int i = 0; i < m; ++i) {
+        lm[i].alpha = 0.0f;
+        lm[i].ys    = 0.0f;
+        lm[i].s     = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data;
+        lm[i].y     = (float*)ggml_new_tensor_1d(ctx, ggml_type.GGML_TYPE_F32, nx)->data;
+    }
+
+    // evaluate the function value and its gradient
+    {
+        ggml_opt_set_params(np, ps, x);
+
+        ggml_graph_reset  (gf);
+        ggml_set_f32      (f->grad, 1.0f);
+        ggml_graph_compute(ctx, gb);
+
+        ggml_opt_get_grad(np, ps, g);
+
+        fx = ggml_get_f32_1d(f, 0);
+    }
+
+    if (pf is not null) {
+        pf[0] = fx;
+    }
+
+    float fx_best = fx;
+
+    // search direction = -gradient
+    ggml_vec_neg_f32(nx, d, g);
+
+    // ||x||, ||g||
+    ggml_vec_norm_f32(nx, &xnorm, x);
+    ggml_vec_norm_f32(nx, &gnorm, g);
+
+    if (xnorm < 1.0f) {
+        xnorm = 1.0f;
+    }
+
+    // already optimized
+    if (gnorm/xnorm <= @params.lbfgs.eps) {
+        return ggml_opt_result.GGML_OPT_OK;
+    }
+
+    // initial step
+    ggml_vec_norm_inv_f32(nx, &step, d);
+
+    int j                = 0;
+    int k                = 1;
+    int ls               = 0;
+    int end              = 0;
+    int bound            = 0;
+    int n_no_improvement = 0;
+
+    float ys   = 0.0f;
+    float yy   = 0.0f;
+    float beta = 0.0f;
+
+    while (true) {
+        // store the current position and gradient vectors
+        ggml_vec_cpy_f32(nx, xp, x);
+        ggml_vec_cpy_f32(nx, gp, g);
+
+        ls = (int)linesearch_backtracking(ctx, &@params, nx, x, &fx, g, d, &step, xp, f, gf, gb, np, ps);
+
+        if (ls < 0) {
+            // linesearch failed - go back to the previous point and return
+            ggml_vec_cpy_f32(nx, x, xp);
+            ggml_vec_cpy_f32(nx, g, gp);
+
+            return (ggml_opt_result)ls;
+        }
+
+        ggml_vec_norm_f32(nx, &xnorm, x);
+        ggml_vec_norm_f32(nx, &gnorm, g);
+
+        GGML_PRINT_DEBUG("f = %10.6f\n", ggml_get_f32_1d(f, 0));
+
+        if (xnorm < 1.0f) {
+            xnorm = 1.0f;
+        }
+        if (gnorm/xnorm <= @params.lbfgs.eps) {
+            // converged
+            return ggml_opt_result.GGML_OPT_OK;
+        }
+
+        // delta-based convergence test
+        if (pf != null) {
+            // need at least params.past iterations to start checking for convergence
+            if (@params.past <= k) {
+                float rate = (pf[k%@params.past] - fx)/fx;
+
+                if (MathF.Abs(rate) < @params.delta) {
+                    return ggml_opt_result.GGML_OPT_OK;
+                }
+            }
+
+            pf[k%@params.past] = fx;
+        }
+
+        // check for improvement
+        if (@params.max_no_improvement > 0) {
+            if (fx < fx_best) {
+                fx_best = fx;
+                n_no_improvement = 0;
+            } else {
+                n_no_improvement++;
+
+                if (n_no_improvement >= @params.max_no_improvement) {
+                    return ggml_opt_result.GGML_OPT_OK;
+                }
+            }
+        }
+
+        if (@params.lbfgs.n_iter != 0 && @params.lbfgs.n_iter < k + 1) {
+            // reached the maximum number of iterations
+            return ggml_opt_result.GGML_OPT_DID_NOT_CONVERGE;
+        }
+
+        // update vectors s and y:
+        //   s_{k+1} = x_{k+1} - x_{k} = \step * d_{k}.
+        //   y_{k+1} = g_{k+1} - g_{k}.
+        //
+        ggml_vec_sub_f32(nx, lm[end].s, x, xp);
+        ggml_vec_sub_f32(nx, lm[end].y, g, gp);
+
+        // compute scalars ys and yy:
+        //     ys = y^t \cdot s    -> 1 / \rho.
+        //     yy = y^t \cdot y.
+        //
+        ggml_vec_dot_f32(nx, &ys, lm[end].y, lm[end].s);
+        ggml_vec_dot_f32(nx, &yy, lm[end].y, lm[end].y);
+
+        lm[end].ys = ys;
+
+        // find new search direction
+        //   ref: https://en.wikipedia.org/wiki/Limited-memory_BFGS
+
+        bound = (m <= k) ? m : k;
+        k++;
+        end = (end + 1)%m;
+
+        // initialize search direction with -g
+        ggml_vec_neg_f32(nx, d, g);
+
+        j = end;
+        for (int i = 0; i < bound; ++i) {
+            j = (j + m - 1) % m;
+            // \alpha_{j} = \rho_{j} s^{t}_{j} \cdot q_{k+1}
+            ggml_vec_dot_f32(nx, &lm[j].alpha, lm[j].s, d);
+            lm[j].alpha /= lm[j].ys;
+            // q_{i} = q_{i+1} - \alpha_{i} y_{i}
+            ggml_vec_mad_f32(nx, d, lm[j].y, -lm[j].alpha);
+        }
+
+        ggml_vec_scale_f32(nx, d, ys/yy);
+
+        for (int i = 0; i < bound; ++i) {
+            // \beta_{j} = \rho_{j} y^t_{j} \cdot \gamma_{i}
+            ggml_vec_dot_f32(nx, &beta, lm[j].y, d);
+            beta /= lm[j].ys;
+            // \gamma_{i+1} = \gamma_{i} + (\alpha_{j} - \beta_{j}) s_{j}
+            ggml_vec_mad_f32(nx, d, lm[j].s, lm[j].alpha - beta);
+            j = (j + 1)%m;
+        }
+
+        step = 1.0f;
+    }
+
+    return ggml_opt_result.GGML_OPT_DID_NOT_CONVERGE;
+}
+
+    public static ggml_opt_params ggml_opt_default_params(ggml_opt_type type)
+    {
+        ggml_opt_params result = default;
+
+        switch (type)
+        {
+            case ggml_opt_type.GGML_OPT_ADAM:
+            {
+                result = new ggml_opt_params
+                {
+                    type = ggml_opt_type.GGML_OPT_ADAM,
+                    n_threads = 1,
+                    past = 0,
+                    delta = 1e-5f,
+
+                    max_no_improvement = 100,
+
+                    print_forward_graph = true,
+                    print_backward_graph = true,
+
+                    adam = new()
+                    {
+                        n_iter = 10000,
+                        alpha = 0.001f,
+                        beta1 = 0.9f,
+                        beta2 = 0.999f,
+                        eps = 1e-8f,
+                        eps_f = 1e-5f,
+                        eps_g = 1e-3f,
+                    },
+                };
+            }
+                break;
+            case ggml_opt_type.GGML_OPT_LBFGS:
+            {
+                result = new ggml_opt_params
+                {
+                    type = ggml_opt_type.GGML_OPT_LBFGS,
+                    n_threads = 1,
+                    past = 0,
+                    delta = 1e-5f,
+
+                    max_no_improvement = 0,
+
+                    print_forward_graph = true,
+                    print_backward_graph = true,
+
+                    lbfgs = new()
+                    {
+                        m = 6,
+                        n_iter = 100,
+                        max_linesearch = 20,
+
+                        eps = 1e-5f,
+                        ftol = 1e-4f,
+                        wolfe = 0.9f,
+                        min_step = 1e-20f,
+                        max_step = 1e+20f,
+
+                        linesearch = ggml_linesearch.GGML_LINESEARCH_DEFAULT,
+                    },
+                };
+            }
+                break;
+            default:
+                Debug.Assert(false);
+                break;
+        }
+
+        return result;
+    }
+    
+    public static ggml_opt_result ggml_opt(
+        ggml_context * ctx,
+        ggml_opt_params @params,
+        ggml_tensor * f) {
+        bool free_ctx = false;
+        if (ctx == null) {
+            ggml_init_params params_ctx = new ggml_init_params{
+                mem_size   = 16*1024*1024,
+                mem_buffer = null,
+                no_alloc   = false,
+            };
+
+            ctx = ggml_init(params_ctx);
+            if (ctx == null) {
+                return ggml_opt_result.GGML_OPT_NO_CONTEXT;
+            }
+
+            free_ctx = true;
+        }
+
+        ggml_opt_result result = ggml_opt_result.GGML_OPT_OK;
+
+        // build forward + backward compute graphs
+        ggml_cgraph gf = ggml_build_forward (f);
+        ggml_cgraph gb = ggml_build_backward(ctx, &gf, false);
+
+        switch (@params.type) {
+            case ggml_opt_type.GGML_OPT_ADAM:
+            {
+                result = ggml_opt_adam(ctx, @params, f, &gf, &gb);
+            } break;
+            case ggml_opt_type.GGML_OPT_LBFGS:
+            {
+                result = ggml_opt_lbfgs(ctx, @params, f, &gf, &gb);
+            } break;
+        }
+
+        if (@params.print_forward_graph) {
+            ggml_graph_print   (&gf);
+            ggml_graph_dump_dot(&gf, null, "opt-forward.dot");
+        }
+
+        if (@params.print_backward_graph) {
+            ggml_graph_print   (&gb);
+            ggml_graph_dump_dot(&gb, &gf, "opt-backward.dot");
+        }
+
+        if (free_ctx) {
+            ggml_free(ctx);
+        }
+
+        return result;
     }
 
     public static void ggml_print_object(in ggml_object* obj)
@@ -1699,7 +2452,7 @@ public static unsafe class Ggml
 
     public static void ggml_vec_set_f16(int n, Half* x, int v) { for (int i = 0; i < n; ++i) x[i] = (Half)v; }
     
-    static void ggml_vec_add_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
+    static void ggml_vec_add_f32(int n, float* z, float* x, float*y) { for (int i = 0; i < n; ++i) z[i]  = x[i] + y[i]; }
     static void ggml_vec_acc_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] += x[i]; }
     static void ggml_vec_acc1_f32(int n, float* y, float v) { for (int i = 0; i < n; ++i) y[i] += v; }
     static void ggml_vec_sub_f32(int n, float* z, float* x, float* y) { for (int i = 0; i < n; ++i) z[i]  = x[i] - y[i]; }
@@ -1707,7 +2460,7 @@ public static unsafe class Ggml
     static void ggml_vec_cpy_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = x[i]; }
     static void ggml_vec_neg_f32(int n, float* y, float*x) { for (int i = 0; i < n; ++i) y[i] = -x[i]; }
     static void ggml_vec_mul_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] * y[i]; }
-    static void ggml_vec_div_f32(int n, float* z, float* y, float*x) { for (int i = 0; i < n; ++i) z[i]  = x[i] / y[i]; }
+    static void ggml_vec_div_f32(int n, float* z, float* x, float*y) { for (int i = 0; i < n; ++i) z[i]  = x[i] / y[i]; }
 
     static void ggml_vec_dot_f32(int n, float* s, float* x, float* y)
     {
@@ -1806,6 +2559,23 @@ public static unsafe class Ggml
         }
         *s = sum;
     }
+    
+    static void ggml_vec_max_f32(int n, float* s, float * x) {
+#if !GGML_USE_ACCELERATE
+        float max = float.NegativeInfinity;
+        for (int i = 0; i < n; ++i) {
+            max = MathF.Max(max, x[i]);
+        }
+        *s = max;
+#else
+        vDSP_maxv(x, 1, s, n);
+#endif
+    }
+    
+    static void ggml_vec_norm_inv_f32(int n, float * s, float * x) {
+        ggml_vec_norm_f32(n, s, x);
+        *s = 1.0f/(*s);
+    }
 
     public static float ggml_get_f32_1d(ggml_tensor* tensor, int i)
     {
@@ -1849,6 +2619,82 @@ public static unsafe class Ggml
         }
 
         return 0.0f;
+    }
+    
+    static void ggml_set_f32_1d(ggml_tensor * tensor, int i, float value) {
+        switch (tensor->type) {
+            case ggml_type.GGML_TYPE_I8:
+            {
+                Debug.Assert(tensor->nb[0] == sizeof(byte));
+                ((byte *)(tensor->data))[i] = (byte)value;
+            } break;
+            case ggml_type.GGML_TYPE_I16:
+            {
+                Debug.Assert(tensor->nb[0] == sizeof(short));
+                ((short*)(tensor->data))[i] = (short)value;
+            } break;
+            case ggml_type.GGML_TYPE_I32:
+            {
+                Debug.Assert(tensor->nb[0] == sizeof(int));
+                ((int *)(tensor->data))[i] = (int)value;
+            } break;
+            case ggml_type.GGML_TYPE_F16:
+            {
+                Debug.Assert((int)tensor->nb[0] == sizeof(Half));
+                ((Half *)(tensor->data))[i] = (Half)(value);
+            } break;
+            case ggml_type.GGML_TYPE_F32:
+            {
+                Debug.Assert(tensor->nb[0] == sizeof(float));
+                ((float *)(tensor->data))[i] = value;
+            } break;
+            default:
+            {
+                Debug.Assert(false);
+            } break;
+        }
+    }
+
+    static void ggml_graph_print(ggml_cgraph * cgraph) {
+        long[] perf_total_per_op_us = new long[(int)ggml_op.GGML_OP_COUNT];
+
+        GGML_PRINT("=== GRAPH ===\n");
+
+        GGML_PRINT_DEBUG("n_threads       = {0}\n",        cgraph->n_threads);
+        GGML_PRINT_DEBUG("total work size = {0} bytes\n", cgraph->work_size);
+
+        GGML_PRINT("n_nodes = {0}\n", cgraph->n_nodes);
+        for (int i = 0; i < cgraph->n_nodes; i++) {
+            ggml_tensor * node = cgraph->get_node(i);
+
+            perf_total_per_op_us[(int)node->op] += Math.Max(1, node->perf_time_us);
+
+            GGML_PRINT(" - {0,3}: [{1,5:X}, {2,5:X}, {3,5:X}] {4,16} {5} ({6,3}) cpu = {7,7:F3} / {8,7:F3} ms, wall = {9,7:F3} / {10,7:F3} ms\n",
+                i,
+                node->ne[0], node->ne[1], node->ne[2],
+                GGML_OP_LABEL[(int)node->op], node->is_param ? "x" : node->grad is not null ? "g" : " ", node->perf_runs,
+                (double) node->perf_cycles  / (double) ggml_cycles_per_ms(),
+                (double) node->perf_cycles  / (double) ggml_cycles_per_ms() / (double) node->perf_runs,
+                (double) node->perf_time_us / 1000.0,
+                (double) node->perf_time_us / 1000.0 / node->perf_runs);
+        }
+
+        GGML_PRINT("n_leafs = {0}\n", cgraph->n_leafs);
+        for (int i = 0; i < cgraph->n_leafs; i++) {
+            ggml_tensor * node = cgraph->get_leaf(i);
+
+            GGML_PRINT($" - {i,3}: [ {node->ne[0]}, {node->ne[1]}] {GGML_OP_LABEL[(int)node->op],8}\n");
+        }
+
+        for (int i = 0; i < (int)ggml_op.GGML_OP_COUNT; i++) {
+            if (perf_total_per_op_us[i] == 0) {
+                continue;
+            }
+
+            GGML_PRINT($"perf_total_per_op_us[{GGML_OP_LABEL[i],-16}] = {(perf_total_per_op_us[i] / 1000.0),7:F3}%7.3f ms\n");
+        }
+
+        GGML_PRINT("========================================\n");
     }
 
     // check if node is part of the graph
@@ -2023,6 +2869,41 @@ public static unsafe class Ggml
         fp.WriteLine("}\n");
 
         GGML_PRINT($"{nameof(ggml_graph_dump_dot)}: dot -Tpng {filename} -o {filename}.png && open {filename}.png\n");
+    }
+
+    ////////////////////////////////////////////////////////////////////////////////
+
+    static void ggml_opt_set_params(int np, ggml_tensor ** ps, float * x) {
+        int i = 0;
+        for (int p = 0; p < np; ++p) {
+            long ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to set tensor from array
+            for (long j = 0; j < ne; ++j) {
+                ggml_set_f32_1d(ps[p], (int)j, x[i++]);
+            }
+        }
+    }
+
+    static void ggml_opt_get_params(int np, ggml_tensor ** ps, float * x) {
+        int i = 0;
+        for (int p = 0; p < np; ++p) {
+            long ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to get all elements at once
+            for (long j = 0; j < ne; ++j) {
+                x[i++] = ggml_get_f32_1d(ps[p], (int)j);
+            }
+        }
+    }
+
+    static void ggml_opt_get_grad(int np, ggml_tensor ** ps, float * g) {
+        int i = 0;
+        for (int p = 0; p < np; ++p) {
+            long ne = ggml_nelements(ps[p]) ;
+            // TODO: add function to get all elements at once
+            for (long j = 0; j < ne; ++j) {
+                g[i++] = ggml_get_f32_1d(ps[p]->grad, (int)j);
+            }
+        }
     }
     private static void atomic_store(ref int ptr, int value)
     {
@@ -2561,7 +3442,7 @@ public static unsafe class Ggml
             cgraph->perf_cycles += perf_cycles_cur;
             cgraph->perf_time_us += perf_time_us_cur;
 
-            GGML_PRINT_DEBUG($"{nameof(ggml_graph_compute)}: perf ({cgraph->perf_runs}) - cpu = %.3f / %.3f ms, wall = %.3f / %.3f ms\n",
+            GGML_PRINT_DEBUG($"{nameof(ggml_graph_compute)}: perf ({cgraph->perf_runs}) - cpu = {0:F3} / {1:F3} ms, wall = {2:F3} / {3:F3} ms\n",
                     (double)perf_cycles_cur / (double)ggml_cycles_per_ms(),
                     (double)cgraph->perf_cycles / (double)ggml_cycles_per_ms() / (double)cgraph->perf_runs,
                     (double)perf_time_us_cur / 1000.0,
