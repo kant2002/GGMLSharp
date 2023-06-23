@@ -4,12 +4,23 @@
 public struct Buffer64<T>
 {
     private T _element0;
+
+    public T this[int i]
+    {
+        get => this[i];
+        set => this[i] = value;
+    }
 }
 
 [System.Runtime.CompilerServices.InlineArray(4096 /*GGML_MAX_NODES*/)]
 public struct Buffer4096<T> where T : unmanaged
 {
     private T _element0;
+    public T this[int i]
+    {
+        get => this[i];
+        set => this[i] = value;
+    }
 }
 
 public unsafe struct ggml_init_params
@@ -88,6 +99,7 @@ public unsafe struct ggml_tensor
     public void* data;
     public fixed byte padding[8];
 }
+
 // computation graph
 public unsafe struct ggml_cgraph {
     const int GGML_MAX_NODES = 4096;
@@ -110,52 +122,34 @@ public unsafe struct ggml_cgraph {
     public long perf_cycles;
     public long perf_time_us;
 
-    public unsafe ggml_tensor* get_node(int index)
+    public unsafe static ggml_tensor* get_node(ggml_cgraph* graph, int index)
     {
-        fixed (void* ptr = &nodes)
-        {
-            return ((ggml_tensor**)ptr)[index];
-        }
+        return ((ggml_tensor**)&graph->nodes)[index];
     }
 
-    public void set_node(int index, ggml_tensor* value)
+    public unsafe static void set_node(ggml_cgraph* graph, int index, ggml_tensor* value)
     {
-        fixed (void* ptr = &nodes)
-        {
-            ((ggml_tensor**)ptr)[index] = value;
-        }
+        ((ggml_tensor**)&graph->nodes)[index] = value;
     }
 
-    public ggml_tensor* get_leaf(int index)
+    public unsafe static ggml_tensor* get_leaf(ggml_cgraph* graph, int index)
     {
-        fixed (void* ptr = &leafs)
-        {
-            return ((ggml_tensor**)ptr)[index];
-        }
+        return ((ggml_tensor**)&graph->leafs)[index];
     }
 
-    public void set_leaf(int index, ggml_tensor* value)
+    public unsafe static void set_leaf(ggml_cgraph* graph, int index, ggml_tensor* value)
     {
-        fixed (void* ptr = &leafs)
-        {
-            ((ggml_tensor**)ptr)[index] = value;
-        }
+        ((ggml_tensor**)&graph->leafs)[index] = value;
     }
 
-    public unsafe ggml_tensor* get_grad(int index)
+    public unsafe static ggml_tensor* get_grad(ggml_cgraph* graph, int index)
     {
-        fixed (void* ptr = &grads)
-        {
-            return ((ggml_tensor**)ptr)[index];
-        }
+        return ((ggml_tensor**)&graph->grads)[index];
     }
 
-    public void set_grad(int index, ggml_tensor* value)
+    public unsafe static void set_grad(ggml_cgraph* graph, int index, ggml_tensor* value)
     {
-        fixed (void* ptr = &grads)
-        {
-            ((ggml_tensor**)ptr)[index] = value;
-        }
+        ((ggml_tensor**)&graph->grads)[index] = value;
     }
 };
 public enum ggml_type
