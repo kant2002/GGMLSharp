@@ -3038,7 +3038,7 @@ public static unsafe class Ggml
             }
 
             fp.WriteLine(
-                $"  \"{(nint)node}\" [ style = filled; fillcolor = {color}; shape = record; label=\"{i} [{node->ne[0]}, {node->ne[1]} | <x>{GGML_OP_SYMBOL[(int)node->op]}");
+                $"  \"{(nint)node}\" [ style = filled; fillcolor = {color}; shape = record; label=\"{i} [{node->ne[0]}, {node->ne[1]}] | <x>{GGML_OP_SYMBOL[(int)node->op]}");
 
             if (node->grad is not null)
             {
