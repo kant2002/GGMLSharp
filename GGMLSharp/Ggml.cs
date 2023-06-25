@@ -3939,7 +3939,7 @@ public static unsafe class Ggml
 
                     nuint id = 0;
                     nuint rs = (nuint)nb0 * (nuint)(ne00 / GGML_BLCK_SIZE[(int)dst->type]);
-                    char* dst_ptr = (char*)dst->data;
+                    byte* dst_ptr = (byte*)dst->data;
 
                     for (int i03 = 0; i03 < ne03; i03++)
                     {
@@ -3987,7 +3987,7 @@ public static unsafe class Ggml
                             {
                                 for (int i00 = 0; i00 < ne00; i00++)
                                 {
-                                    Half* src0_ptr = (Half*)((char*)src0->data + (nuint)i00 * (nuint)nb00 +
+                                    Half* src0_ptr = (Half*)((byte*)src0->data + (nuint)i00 * (nuint)nb00 +
                                                              (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 +
                                                              (nuint)i03 * (nuint)nb03);
 
@@ -4656,9 +4656,9 @@ public static unsafe class Ggml
             {
 #if GGML_USE_ACCELERATE
                 vDSP_vadd(
-                    (float *) ((char *) src0->data + j*nb01), 1,
-                    (float *) ((char *) src1->data + j*nb11), 1,
-                    (float *) ((char *) dst->data  + j*nb1),  1, nc);
+                    (float *) ((byte *) src0->data + j*nb01), 1,
+                    (float *) ((byte *) src1->data + j*nb11), 1,
+                    (float *) ((byte *) dst->data  + j*nb1),  1, nc);
 #else
                 ggml_vec_add_f32(nc,
                     (float*)((byte*)dst->data + (nuint)j * nb1),
