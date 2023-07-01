@@ -18,13 +18,9 @@ unsafe
     //ggml_opt_params opt_params = ggml_opt_default_params(ggml_opt_type.GGML_OPT_ADAM);
 
     opt_params.n_threads = (args.Length > 0) ? int.Parse(args[1]) : 8;
-    opt_params.n_threads = 1;
 
     const int NP = 1 << 12;
     const int NF = 1 << 8;
-
-    // const int NP = 1 << 6;
-    // const int NF = 1 << 2;
 
     ggml_context * ctx0 = ggml_init(init_params);
 
@@ -35,15 +31,12 @@ unsafe
     ggml_tensor * lambda = ggml_new_f32(ctx0, 1e-5f);
 
     xsrand(0);
-    //var random = new Random(0);
 
     for (int j = 0; j < NP; j++) {
         float ll = j < NP/2 ? 1.0f : -1.0f;
         ((float *)l->data)[j] = ll;
 
         for (int i = 0; i < NF; i++) {
-            //int x = xrand();
-            //int y = xrand();
             ((float *)F->data)[j*NF + i] = ((ll > 0 && i < NF/2 ? 1.0f : ll < 0 && i >= NF/2 ? 1.0f : 0.0f) + ((float)xrand()/(float)RAND_MAX - 0.5f)*0.1f)/(0.5f*NF);
         }
     }
