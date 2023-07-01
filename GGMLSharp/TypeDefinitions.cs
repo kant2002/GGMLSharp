@@ -1,26 +1,24 @@
-﻿namespace GGMLSharp;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
-[System.Runtime.CompilerServices.InlineArray(64 /*GGML_MAX_CONTEXTS*/)]
+namespace GGMLSharp;
+
+[InlineArray(64 /*GGML_MAX_CONTEXTS*/)]
 public struct Buffer64<T>
 {
     private T _element0;
 
-    public T this[int i]
-    {
-        get => this[i];
-        set => this[i] = value;
-    }
+    [UnscopedRef]
+    public ref T this[int i] => ref Unsafe.Add(ref _element0, i);
 }
 
-[System.Runtime.CompilerServices.InlineArray(4096 /*GGML_MAX_NODES*/)]
+[InlineArray(4096 /*GGML_MAX_NODES*/)]
 public struct Buffer4096<T> where T : unmanaged
 {
     private T _element0;
-    public T this[int i]
-    {
-        get => this[i];
-        set => this[i] = value;
-    }
+
+    [UnscopedRef]
+    public ref T this[int i] => ref Unsafe.Add(ref _element0, i);
 }
 
 public unsafe struct ggml_init_params

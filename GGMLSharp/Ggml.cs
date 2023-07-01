@@ -1626,7 +1626,7 @@ public static unsafe class Ggml
         int nx = 0;
         for (int i = 0; i < gf->n_nodes; ++i)
         {
-            var node = (ggml_tensor*)gf->nodes[i];
+            var node = ggml_cgraph.get_node(gf, i);
             if (node->is_param)
             {
                 GGML_PRINT_DEBUG("found param {0}: grad->op = {1}\n", np, node->grad->op);
@@ -3838,8 +3838,8 @@ public static unsafe class Ggml
             int ie1 = Math.Min(ie0 + dr, (int)ne);
 
             NativeMemory.Copy(
-                ((byte*)dst->data + ie0 * (int)nb0),
                 ((byte*)src0->data + ie0 * (int)nb00),
+                ((byte*)dst->data + ie0 * (int)nb0),
                 (nuint)(ie1 - ie0) * (nuint)GGML_TYPE_SIZE[(int)src0->type]);
 
             return;
@@ -3866,10 +3866,10 @@ public static unsafe class Ggml
                     for (long i01 = ir0; i01 < ir1; i01++)
                     {
                         NativeMemory.Copy(
-                            ((byte*)dst->data + (nuint)i01 * (nuint)nb1 + (nuint)i02 * (nuint)nb2 +
-                             (nuint)i03 * (nuint)nb3),
                             ((byte*)src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 +
                              (nuint)i03 * (nuint)nb03),
+                            ((byte*)dst->data + (nuint)i01 * (nuint)nb1 + (nuint)i02 * (nuint)nb2 +
+                             (nuint)i03 * (nuint)nb3),
                             rs);
                     }
                 }
@@ -3899,7 +3899,7 @@ public static unsafe class Ggml
                             {
                                 byte* src0_ptr = (byte*)src0->data + (nuint)i01 * (nuint)nb01 +
                                                  (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03;
-                                NativeMemory.Copy(dst_ptr + id, src0_ptr, rs);
+                                NativeMemory.Copy(src0_ptr, dst_ptr + id, rs);
                                 id += rs;
                             }
 
@@ -4075,7 +4075,7 @@ public static unsafe class Ggml
                             byte* dst_ptr = ((byte*)dst->data + (nuint)i10 * (nuint)nb0 + (nuint)i11 * (nuint)nb1 +
                                              (nuint)i12 * (nuint)nb2 + (nuint)i13 * (nuint)nb3);
 
-                            NativeMemory.Copy(dst_ptr, src0_ptr, (nuint)sizeof(Half));
+                            NativeMemory.Copy(src0_ptr, dst_ptr, (nuint)sizeof(Half));
 
                             if (++i10 == ne00)
                             {
@@ -4241,8 +4241,8 @@ public static unsafe class Ggml
             int ie1 = Math.Min(ie0 + dr, ne);
 
             NativeMemory.Copy(
-                ((byte*)dst->data + (nuint)ie0 * (nuint)nb0),
                 ((byte*)src0->data + (nuint)ie0 * (nuint)nb00),
+                ((byte*)dst->data + (nuint)ie0 * (nuint)nb0),
                 (nuint)(ie1 - ie0) * (nuint)GGML_TYPE_SIZE[(int)src0->type]);
 
             return;
@@ -4269,10 +4269,10 @@ public static unsafe class Ggml
                     for (long i01 = ir0; i01 < ir1; i01++)
                     {
                         NativeMemory.Copy(
-                            ((byte*)dst->data + (nuint)i01 * (nuint)nb1 + (nuint)i02 * (nuint)nb2 +
-                             (nuint)i03 * (nuint)nb3),
                             ((byte*)src0->data + (nuint)i01 * (nuint)nb01 + (nuint)i02 * (nuint)nb02 +
                              (nuint)i03 * (nuint)nb03),
+                            ((byte*)dst->data + (nuint)i01 * (nuint)nb1 + (nuint)i02 * (nuint)nb2 +
+                             (nuint)i03 * (nuint)nb3),
                             rs);
                     }
                 }
@@ -4301,7 +4301,7 @@ public static unsafe class Ggml
                             {
                                 byte* src0_ptr = (byte*)src0->data + (nuint)i01 * (nuint)nb01 +
                                                  (nuint)i02 * (nuint)nb02 + (nuint)i03 * (nuint)nb03;
-                                NativeMemory.Copy(dst_ptr + id, src0_ptr, rs);
+                                NativeMemory.Copy(src0_ptr, dst_ptr + id, rs);
                                 id += rs;
                             }
 
@@ -4473,7 +4473,7 @@ public static unsafe class Ggml
                             byte* dst_ptr = ((byte*)dst->data + (nuint)i10 * (nuint)nb0 + (nuint)i11 * (nuint)nb1 +
                                              (nuint)i12 * (nuint)nb2 + (nuint)i13 * (nuint)nb3);
 
-                            NativeMemory.Copy(dst_ptr, src0_ptr, sizeof(float));
+                            NativeMemory.Copy(src0_ptr, dst_ptr, sizeof(float));
 
                             if (++i10 == ne0)
                             {
@@ -8756,6 +8756,66 @@ static bool ggml_compute_forward_mul_mat_use_blas(
                 Debug.Assert(false);
             }
                 break;
+        }
+    }
+
+    public static void ggml_print_graph(ggml_cgraph* gh)
+    {
+        Console.WriteLine($"Node & Grads");
+        for (var i = 0; i < gh->n_nodes; i++)
+        {
+            var node = (ggml_tensor*)gh->nodes[i];
+            var grad = (ggml_tensor*)gh->grads[i];
+            Console.WriteLine($"{node->op}");
+            ggml_print_tensor_data(node);
+            if (grad is not null)
+            {
+                Console.WriteLine($"{grad->op}");
+                ggml_print_tensor_data(grad);
+            }
+        }
+
+        Console.WriteLine($"Leafs");
+        for (var i = 0; i < gh->n_leafs; i++)
+        {
+            var node = (ggml_tensor*)gh->leafs[i];
+            Console.WriteLine($"{node->op}");
+            ggml_print_tensor_data(node);
+        }
+    }
+
+    public static void ggml_print_tensor_data(ggml_tensor* t)
+    {
+        int ndims = t->n_dims;
+        long* dims = t->ne;
+
+        // print results
+        var n30 = ndims >= 3 ? dims[3] : 1;
+        var n20 = ndims >= 2 ? dims[2] : 1;
+        var n10 = ndims >= 1 ? dims[1] : 1;
+        var n00 = ndims >= 0 ? dims[0] : 1;
+        nuint nb0 = (nuint)t->nb[0];
+        nuint nb1 = (nuint)t->nb[1];
+        nuint nb2 = (nuint)t->nb[2];
+        nuint nb3 = (nuint)t->nb[3];
+        for (int i3 = 0; i3 < n30; ++i3)
+        {
+            for (int i2 = 0; i2 < n20; ++i2)
+            {
+                for (int i1 = 0; i1 < n10; ++i1)
+                {
+                    for (int i0 = 0; i0 < n00; ++i0)
+                    {
+                        Console.Write("{0,10:F6} ", *(float*)((byte*)t->data + (nuint)i0 * nb0 + (nuint)i1 * nb1 + (nuint)i2 * nb2 + (nuint)i3 * nb3));
+                    }
+
+                    Console.WriteLine();
+                }
+
+                Console.WriteLine();
+            }
+
+            Console.WriteLine("=================");
         }
     }
 
